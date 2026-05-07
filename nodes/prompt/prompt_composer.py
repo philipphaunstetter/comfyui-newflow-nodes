@@ -22,28 +22,29 @@ class NewflowPromptComposer(io.ComfyNode):
             description=(
                 "Composes a user prompt, a system prompt, and an LLM output with "
                 "variable substitution. Use [[Key]] placeholders that map to keys "
-                "from a connected variables JSON. Missing keys are emitted as "
-                "[MISSING: Key]. The `prompt` output is the LLM editor's content "
+                "from the OPTIONS JSON. Missing keys are emitted as "
+                "[MISSING: Key]. The OUTPUT output is the LLM editor's content "
                 "(generated via Ollama and optionally hand-edited). Accepts "
-                "images via either `images` (padded IMAGE batch) or `images_list` "
-                "(IMAGE_LIST from NewflowImageBatch / NewflowClothing — preserves "
-                "native dimensions for vision LLMs)."
+                "images via either IMAGES (padded IMAGE batch) or IMAGE_LIST "
+                "(from NewflowImageBatch / NewflowClothing — preserves native "
+                "dimensions for vision LLMs). For plain-text user/system inputs "
+                "without variable templating, use NewflowPromptComposerSimple."
             ),
             inputs=[
                 io.String.Input(
-                    "variables",
+                    "OPTIONS",
                     default="{}",
                     optional=True,
                     force_input=True,
                     tooltip="JSON of {label: value} from NewflowDynamicDropdowns or any STRING source.",
                 ),
                 io.Image.Input(
-                    "images",
+                    "IMAGES",
                     optional=True,
                     tooltip="Optional reference image(s) — standard padded IMAGE batch.",
                 ),
                 io.Image.Input(
-                    "images_list",
+                    "IMAGE_LIST",
                     optional=True,
                     tooltip="Optional IMAGE_LIST input — accepts the IMAGE_LIST output of "
                     "NewflowImageBatch or NewflowClothing. Each image keeps its native "
@@ -51,20 +52,20 @@ class NewflowPromptComposer(io.ComfyNode):
                 ),
             ],
             outputs=[
-                io.String.Output("user_prompt"),
-                io.String.Output("system_prompt"),
-                io.String.Output("prompt"),
+                io.String.Output("USER"),
+                io.String.Output("SYSTEM"),
+                io.String.Output("OUTPUT"),
             ],
             hidden=[io.Hidden.prompt, io.Hidden.unique_id],
             is_input_list=True,
         )
 
     @classmethod
-    def execute(cls, variables="{}", images=None, images_list=None):
+    def execute(cls, OPTIONS="{}", IMAGES=None, IMAGE_LIST=None):
         # With is_input_list=True, every input arrives as a list. Unwrap singletons.
-        variables = cls._unwrap(variables, default="{}")
+        OPTIONS = cls._unwrap(OPTIONS, default="{}")
 
-        vars_dict = cls._parse_vars(variables)
+        vars_dict = cls._parse_vars(OPTIONS)
 
         prompt = cls.hidden.prompt or {}
         unique_id = str(cls.hidden.unique_id)
@@ -75,10 +76,10 @@ class NewflowPromptComposer(io.ComfyNode):
         llm_text = cls._read_state_text(node_inputs.get(cls.LLM_WIDGET))
 
         # Cache images so JS-driven Generate calls include them in /newflow/llm/generate.
-        # Combine both inputs: padded `images` (single tensor batch) + `images_list`
+        # Combine both inputs: padded IMAGES (single tensor batch) + IMAGE_LIST
         # (native-sized list). tensor_to_b64_pngs handles tensor-or-list transparently.
         combined: list = []
-        for src in (images, images_list):
+        for src in (IMAGES, IMAGE_LIST):
             if src is None:
                 continue
             if isinstance(src, list):

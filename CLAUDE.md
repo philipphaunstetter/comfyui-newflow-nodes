@@ -43,6 +43,19 @@ One package, many nodes. Group node files by feature/theme under `nodes/`, not o
 - **Dependencies**: don't list packages shipped with ComfyUI (`torch`, `numpy`, `PIL`, `scipy`, `safetensors`, `transformers`, `accelerate`). Pin minimums, not exact versions.
 - **No comments unless the *why* is non-obvious.** V3 schemas are self-documenting.
 
+## Node-specific notes
+
+### Prompt Composer variants
+
+Two nodes share LLM streaming logic, settings, image-cache helpers, and the queue-interceptor auto-regen path:
+
+- `NewflowPromptComposer` — rich variant with `[[Key]]` variable templating, chip strip, slash-menu, display modes.
+- `NewflowPromptComposerSimple` — plain-text variant, no variables.
+
+Shared frontend helpers (`DEFAULT_LLM_SETTINGS`, `deserializeLlmState`, `hasDownstreamConsumer`, `openLlmSettings`, `preloadImageCache`) are exported from [js/prompt_composer.js](js/prompt_composer.js) and imported by [js/prompt_composer_simple.js](js/prompt_composer_simple.js). The queue interceptor in `prompt_composer.js` matches both `comfyClass` values.
+
+**When changing either node, check whether the other needs the same change**, especially for: LLM streaming, settings dialog, Generate/Auto/badge/status UI, image-cache logic, queue interceptor, persistence shape. The two `runGenerate`/badge implementations are partially duplicated; if drift becomes painful, extract a shared `js/llm_block.js` module.
+
 ## Local development
 
 Symlink the repo into a local ComfyUI install instead of copying:

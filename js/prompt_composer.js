@@ -16,7 +16,7 @@ const NODE_CHROME_H = 120; // title bar + ports + badge + paddings (approx)
 const MIN_HEIGHT =
     FIXED_USER_WIDGET_H + FIXED_SYSTEM_WIDGET_H + FIXED_LLM_WIDGET_H + NODE_CHROME_H;
 
-const DEFAULT_LLM_SETTINGS = {
+export const DEFAULT_LLM_SETTINGS = {
     ollama_url: "http://localhost:11434",
     model: "",
     temperature: 0.7,
@@ -61,7 +61,8 @@ const isInNewflowEditor = (target) =>
             // honor that here so bypassed/muted Composers don't auto-regen.
             const composers = (app.graph?._nodes || []).filter(
                 (n) =>
-                    n.comfyClass === "NewflowPromptComposer"
+                    (n.comfyClass === "NewflowPromptComposer"
+                        || n.comfyClass === "NewflowPromptComposerSimple")
                     && n._newflowIsAutoRegen?.()
                     && n.mode !== 2
                     && n.mode !== 4
@@ -69,8 +70,53 @@ const isInNewflowEditor = (target) =>
             if (composers.length === 0) {
                 return origQueue(number, batchCount);
             }
+
+            // Topological sort: a composer that consumes another auto-regen
+            // composer's output must run AFTER its upstream finishes — otherwise
+            // the downstream LLM call sees stale (or empty) input. Independent
+            // composers still run in dependency-respecting order; only chained
+            // ones are forced to be sequential.
+            const composerSet = new Set(composers);
+            const depsOf = new Map();
+            for (const c of composers) {
+                const deps = new Set();
+                const inputs = c.inputs || [];
+                for (let i = 0; i < inputs.length; i++) {
+                    const upstream = c.getInputNode?.(i);
+                    if (upstream && composerSet.has(upstream) && upstream !== c) {
+                        deps.add(upstream);
+                    }
+                }
+                depsOf.set(c, deps);
+            }
+            const sorted = [];
+            const remaining = new Set(composers);
+            while (remaining.size > 0) {
+                let progressed = false;
+                for (const c of remaining) {
+                    const unmet = [...depsOf.get(c)].some((d) => remaining.has(d));
+                    if (!unmet) {
+                        sorted.push(c);
+                        remaining.delete(c);
+                        progressed = true;
+                    }
+                }
+                if (!progressed) {
+                    // Cycle detected — fall back to original order so we don't deadlock.
+                    sorted.push(...remaining);
+                    remaining.clear();
+                }
+            }
+
             try {
-                await Promise.all(composers.map((n) => n._newflowRunGenerate?.()));
+                for (const n of sorted) {
+                    markComposerRunning(n);
+                    try {
+                        await n._newflowRunGenerate?.();
+                    } finally {
+                        clearComposerRunning(n);
+                    }
+                }
             } catch (err) {
                 // Abort any in-flight generations from sibling composers.
                 composers.forEach((n) => {
@@ -119,7 +165,7 @@ const escHtml = (s) =>
 // back to "run the workflow once".
 // ---------------------------------------------------------------------------
 
-const COMPOSER_IMAGE_SLOTS = ["images", "images_list"];
+const COMPOSER_IMAGE_SLOTS = ["IMAGES", "IMAGE_LIST"];
 
 function _collectFromNode(node, refs, seen) {
     if (!node || seen.has(node)) return;
@@ -196,7 +242,7 @@ function collectImageFileRefs(composerNode) {
     return refs;
 }
 
-async function preloadImageCache(composerNode) {
+export async function preloadImageCache(composerNode) {
     const refs = collectImageFileRefs(composerNode);
     if (refs.length === 0) return { cached: 0, skipped: [] };
     const resp = await fetch("/newflow/llm/cache_files", {
@@ -213,7 +259,85 @@ async function preloadImageCache(composerNode) {
     return await resp.json();
 }
 
-function hasDownstreamConsumer(node) {
+// Resolve a STRING input's upstream value at JS Generate time. The auto-regen
+// queue interceptor topo-sorts composers so by the time we read here, an
+// upstream composer's LLM widget already holds its freshly generated text. We
+// recognize Newflow Composer outputs explicitly and fall back to a generic
+// string-widget lookup for arbitrary upstream nodes. Returns null if nothing
+// resolvable is connected.
+export function readUpstreamStringForGenerate(node, inputName) {
+    const slotIdx = (node.inputs || []).findIndex((i) => i.name === inputName);
+    if (slotIdx < 0) return null;
+    const inp = node.inputs[slotIdx];
+    if (!inp || inp.link == null) return null;
+    const link = node.graph?.links?.[inp.link];
+    if (!link) return null;
+    const src = node.graph.getNodeById(link.origin_id);
+    if (!src) return null;
+    const outName = src.outputs?.[link.origin_slot]?.name;
+
+    const readDomState = (widgetName) => {
+        const w = src.widgets?.find((x) => x.name === widgetName);
+        if (!w || typeof w.value !== "string") return null;
+        try {
+            const parsed = JSON.parse(w.value);
+            if (parsed && typeof parsed === "object") return String(parsed.text ?? "");
+        } catch { /* not JSON state */ }
+        return w.value;
+    };
+
+    if (src.comfyClass === "NewflowPromptComposer" && outName) {
+        const map = { USER: "user_prompt_state", SYSTEM: "system_prompt_state", OUTPUT: "llm_output_state" };
+        const widgetName = map[outName];
+        if (widgetName) {
+            const v = readDomState(widgetName);
+            if (v != null) return v;
+        }
+    }
+
+    if (src.comfyClass === "NewflowPromptComposerSimple" && outName) {
+        if (outName === "OUTPUT") {
+            const v = readDomState("llm_output_state");
+            if (v != null) return v;
+        }
+        if (outName === "USER" || outName === "SYSTEM") {
+            const w = src.widgets?.find((x) => x.name === outName);
+            if (typeof w?.value === "string") return w.value;
+        }
+    }
+
+    if (outName) {
+        const w = src.widgets?.find((x) => x.name === outName);
+        if (w && typeof w.value === "string") return w.value;
+    }
+    return null;
+}
+
+// Visual "this composer is currently generating" indicator. The auto-regen
+// runs in JS before the workflow queue starts, so ComfyUI's built-in running-
+// node halo never fires for these phases. The native indicator (`app.running
+// NodeId`) is a read-only getter in modern ComfyUI Desktop, so we approximate
+// the effect by tinting the node ourselves and forcing a canvas redraw.
+const RUNNING_BGCOLOR = "#1e3a8a";  // deep blue body
+const RUNNING_COLOR = "#3b82f6";    // brighter blue title bar
+
+export function markComposerRunning(node) {
+    if (!node || node._newflowRunningSnap) return;
+    node._newflowRunningSnap = { bgcolor: node.bgcolor, color: node.color };
+    node.bgcolor = RUNNING_BGCOLOR;
+    node.color = RUNNING_COLOR;
+    node.setDirtyCanvas?.(true, true);
+}
+
+export function clearComposerRunning(node) {
+    if (!node || !node._newflowRunningSnap) return;
+    node.bgcolor = node._newflowRunningSnap.bgcolor;
+    node.color = node._newflowRunningSnap.color;
+    delete node._newflowRunningSnap;
+    node.setDirtyCanvas?.(true, true);
+}
+
+export function hasDownstreamConsumer(node) {
     for (const out of node.outputs || []) {
         if (out.links && out.links.length > 0) return true;
     }
@@ -230,7 +354,7 @@ function resolveTextForLlm(text, valuesMap) {
     });
 }
 
-function deserializeLlmState(v) {
+export function deserializeLlmState(v) {
     let parsed;
     if (v && typeof v === "object" && !Array.isArray(v)) parsed = v;
     else if (!v) parsed = {};
@@ -395,7 +519,7 @@ function scanAndConvert(editor, knownKeys, displayMode, valuesMap) {
 // ---------------------------------------------------------------------------
 
 function findVariablesSlot(node) {
-    return node.inputs?.findIndex((i) => i.name === "variables") ?? -1;
+    return node.inputs?.findIndex((i) => i.name === "OPTIONS") ?? -1;
 }
 
 function readUpstreamRows(node) {
@@ -826,7 +950,7 @@ function makeEditorBlock(node, title, ctx) {
 // LLM settings dialog (URL drives the model dropdown)
 // ---------------------------------------------------------------------------
 
-function openLlmSettings(currentSettings) {
+export function openLlmSettings(currentSettings) {
     return new Promise((resolve) => {
         const dlg = document.createElement("dialog");
         dlg.className = "newflow-dd-dialog newflow-pc-settings-dialog";
@@ -1236,11 +1360,14 @@ function makeOutputBlock(node, ctx) {
             if (!state.settings.model) return;
         }
         let succeeded = false;
+        markComposerRunning(node);
         try {
             await runGenerate({ silent: false });
             succeeded = true;
         } catch {
             // alerts already shown by runGenerate when silent=false
+        } finally {
+            clearComposerRunning(node);
         }
         // After a successful manual Generate, auto-queue the workflow so
         // downstream nodes (Array Split / Pick / etc.) pick up the new
@@ -1287,7 +1414,7 @@ function makeOutputBlock(node, ctx) {
 
     // Helper: are any of the Composer's IMAGE inputs wired upstream?
     const anyImageInputWired = () => {
-        for (const name of ["images", "images_list"]) {
+        for (const name of ["IMAGES", "IMAGE_LIST"]) {
             const slotIdx = (node.inputs || []).findIndex((i) => i.name === name);
             if (slotIdx < 0) continue;
             if (node.getInputNode?.(slotIdx)) return true;
@@ -1492,6 +1619,7 @@ app.registerExtension({
                 serialize: true,
                 getValue: () => llmBlock.getValue(),
             });
+
 
             persist = installPersistence(node, {
                 nodeClass: NODE_NAME,
