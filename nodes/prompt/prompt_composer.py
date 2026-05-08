@@ -26,7 +26,7 @@ class NewflowPromptComposer(io.ComfyNode):
                 "[MISSING: Key]. The OUTPUT output is the LLM editor's content "
                 "(generated via Ollama and optionally hand-edited). Accepts "
                 "images via either IMAGES (padded IMAGE batch) or IMAGE_LIST "
-                "(from NewflowImageBatch / NewflowClothing — preserves native "
+                "(from NewflowImageBatch / NewflowImageArray — preserves native "
                 "dimensions for vision LLMs). For plain-text user/system inputs "
                 "without variable templating, use NewflowPromptComposerSimple."
             ),
@@ -47,7 +47,7 @@ class NewflowPromptComposer(io.ComfyNode):
                     "IMAGE_LIST",
                     optional=True,
                     tooltip="Optional IMAGE_LIST input — accepts the IMAGE_LIST output of "
-                    "NewflowImageBatch or NewflowClothing. Each image keeps its native "
+                    "NewflowImageBatch or NewflowImageArray. Each image keeps its native "
                     "dimensions (no padding) so vision LLMs see them at full quality.",
                 ),
             ],

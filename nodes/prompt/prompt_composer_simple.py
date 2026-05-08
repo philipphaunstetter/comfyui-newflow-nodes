@@ -29,7 +29,7 @@ class NewflowPromptComposerSimple(io.ComfyNode):
                     "IMAGE_LIST",
                     optional=True,
                     tooltip="Optional IMAGE_LIST input — accepts the IMAGE_LIST output of "
-                    "NewflowImageBatch or NewflowClothing. Each image keeps its native "
+                    "NewflowImageBatch or NewflowImageArray. Each image keeps its native "
                     "dimensions (no padding) so vision LLMs see them at full quality.",
                 ),
                 io.String.Input(

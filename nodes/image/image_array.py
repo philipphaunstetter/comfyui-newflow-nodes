@@ -10,37 +10,29 @@ import folder_paths
 from comfy_api.latest import io
 
 
-class NewflowClothing(io.ComfyNode):
-    """A self-contained image batcher for clothing/wardrobe references.
-
-    Each row in the node is one labeled container (e.g. "Top", "Trousers",
-    "Shoes", "Accessory #1"). The user uploads images directly into the node
-    via drag-drop or file picker — no separate Load Image nodes needed.
-
-    Output is the same as NewflowImageBatch: a padded IMAGE batch where each
-    image keeps its original aspect ratio (smaller ones are white-padded to
-    the largest H × W in the set).
-
-    The optional SET CARD input, when connected, becomes Image 1 in the
-    output batch (containers shift to Image 2+).
-    """
-
+class NewflowImageArray(io.ComfyNode):
     WIDGET_NAME = "containers"
+    IMAGE_INPUT_NAMES = ("IMAGE_1", "IMAGE_2", "IMAGE_3", "IMAGE_4")
 
     @classmethod
     def define_schema(cls):
         return io.Schema(
-            node_id="NewflowClothing",
-            display_name="Newflow Clothing",
+            node_id="NewflowImageArray",
+            display_name="Newflow Image Array",
             category="newflow/image",
             description=(
-                "A wardrobe of labeled clothing image uploads. Add containers, "
-                "upload images directly, drag to reorder. Outputs a padded "
-                "IMAGE batch with original aspect ratios preserved. Optional "
-                "SET CARD input becomes Image 1 when connected."
+                "A flexible image array. Up to four optional IMAGE inputs "
+                "(IMAGE_1..IMAGE_4) prepend their first frame to the output "
+                "when connected. Then an arbitrary number of labeled containers "
+                "(images uploaded directly via drag-drop or file picker) follow. "
+                "Outputs a padded IMAGE batch (samplers/preview compatible) and "
+                "an IMAGE_LIST at native resolution (for vision LLMs)."
             ),
             inputs=[
-                io.Image.Input("set_card", optional=True),
+                io.Image.Input("IMAGE_1", optional=True),
+                io.Image.Input("IMAGE_2", optional=True),
+                io.Image.Input("IMAGE_3", optional=True),
+                io.Image.Input("IMAGE_4", optional=True),
             ],
             outputs=[
                 io.Image.Output("IMAGE"),
@@ -50,7 +42,7 @@ class NewflowClothing(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, set_card=None):
+    def execute(cls, IMAGE_1=None, IMAGE_2=None, IMAGE_3=None, IMAGE_4=None):
         prompt = cls.hidden.prompt or {}
         unique_id = str(cls.hidden.unique_id)
         node_inputs = prompt.get(unique_id, {}).get("inputs", {})
@@ -65,23 +57,23 @@ class NewflowClothing(io.ComfyNode):
 
         tensors: list[torch.Tensor] = []
 
-        # Prepend SET CARD if connected (single image only — first frame of any batch).
-        if set_card is not None:
-            sc = set_card
-            if sc.dim() == 3:
-                sc = sc.unsqueeze(0)
-            if sc.shape[0] >= 1:
-                tensors.append(sc[0:1])
+        # Prepend each connected IMAGE_N input in order — first frame only,
+        # matching the original SET CARD semantics.
+        for slot in (IMAGE_1, IMAGE_2, IMAGE_3, IMAGE_4):
+            if slot is None:
+                continue
+            t = slot
+            if t.dim() == 3:
+                t = t.unsqueeze(0)
+            if t.shape[0] >= 1:
+                tensors.append(t[0:1])
 
         for c in containers:
             if not isinstance(c, dict):
                 continue
-            # Per-container include toggle (defaults to True for back-compat).
             if c.get("included", True) is False:
                 continue
 
-            # New multi-image shape: c["images"] is a list of {filename, subfolder, type}.
-            # Old single-image shape: c["filename"] (kept for back-compat).
             images_meta = c.get("images")
             if not isinstance(images_meta, list):
                 if c.get("filename"):
@@ -96,8 +88,6 @@ class NewflowClothing(io.ComfyNode):
             if not images_meta:
                 continue
 
-            # Each container holds a gallery of variants; only the currently
-            # selected one (the visible thumbnail) flows into the output.
             current_idx = c.get("currentIdx", 0)
             if not isinstance(current_idx, int) or current_idx < 0 or current_idx >= len(images_meta):
                 current_idx = 0
@@ -129,7 +119,7 @@ class NewflowClothing(io.ComfyNode):
                 img = ImageOps.exif_transpose(img)
                 img = img.convert("RGB")
                 arr = np.asarray(img, dtype=np.float32) / 255.0
-                tensors.append(torch.from_numpy(arr).unsqueeze(0))  # (1, H, W, 3)
+                tensors.append(torch.from_numpy(arr).unsqueeze(0))
             except Exception:
                 continue
 
@@ -155,6 +145,4 @@ class NewflowClothing(io.ComfyNode):
             )
             padded.append(t_padded)
 
-        # IMAGE: padded batch (back-compat with samplers/preview).
-        # IMAGE_LIST: original tensors at native dimensions (for vision LLMs).
         return io.NodeOutput(torch.cat(padded, dim=0), tensors)

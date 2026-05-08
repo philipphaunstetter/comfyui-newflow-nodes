@@ -160,9 +160,9 @@ const escHtml = (s) =>
 // JIT image cache populator — walks upstream IMAGE sources and collects
 // filenames so the Composer's Generate flow can populate IMAGE_CACHE BEFORE
 // calling Ollama. This way the user doesn't have to run the workflow first.
-// Supports LoadImage, NewflowClothing, and NewflowImageBatch as sources. For other
-// node types we can't introspect, so we just skip them and the user falls
-// back to "run the workflow once".
+// Supports LoadImage, NewflowImageArray, and NewflowImageBatch as sources. For
+// other node types we can't introspect, so we just skip them and the user
+// falls back to "run the workflow once".
 // ---------------------------------------------------------------------------
 
 const COMPOSER_IMAGE_SLOTS = ["IMAGES", "IMAGE_LIST"];
@@ -181,18 +181,19 @@ function _collectFromNode(node, refs, seen) {
         return;
     }
 
-    if (klass === "NewflowClothing") {
+    if (klass === "NewflowImageArray") {
         const w = node.widgets?.find((w) => w.name === "containers");
         if (!w?.value) return;
         let containers;
         try { containers = JSON.parse(w.value); } catch { return; }
         if (!Array.isArray(containers)) return;
 
-        // Mirror the Python execute order: SET CARD first if connected, then
-        // each included container's currently-selected image.
-        const setCardSlot = (node.inputs || []).findIndex((i) => i.name === "set_card");
-        if (setCardSlot >= 0) {
-            const upstream = node.getInputNode?.(setCardSlot);
+        // Mirror the Python execute order: each connected IMAGE_N slot in
+        // order, then each included container's currently-selected image.
+        for (const slotName of ["IMAGE_1", "IMAGE_2", "IMAGE_3", "IMAGE_4"]) {
+            const slotIdx = (node.inputs || []).findIndex((i) => i.name === slotName);
+            if (slotIdx < 0) continue;
+            const upstream = node.getInputNode?.(slotIdx);
             if (upstream) _collectFromNode(upstream, refs, seen);
         }
 

@@ -1,4 +1,4 @@
-.newflow-cl-root {
+.newflow-ia-root {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 6px;
@@ -8,7 +8,7 @@
     align-content: start;
 }
 
-.newflow-cl-add-btn {
+.newflow-ia-add-btn {
     grid-column: 1 / -1;  /* always full width regardless of column count */
     padding: 6px;
     border: 1px dashed var(--border-color, #555);
@@ -19,12 +19,12 @@
     font-size: 12px;
     font-family: inherit;
 }
-.newflow-cl-add-btn:hover {
+.newflow-ia-add-btn:hover {
     border-style: solid;
     color: var(--input-text, #fff);
 }
 
-.newflow-cl-card {
+.newflow-ia-card {
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -35,35 +35,35 @@
     transition: border-color 120ms, opacity 120ms;
 }
 
-.newflow-cl-card-excluded {
+.newflow-ia-card-excluded {
     opacity: 0.45;
 }
-.newflow-cl-card-excluded .newflow-cl-thumb img {
+.newflow-ia-card-excluded .newflow-ia-thumb img {
     filter: grayscale(0.6);
 }
 
-.newflow-cl-card-dragging {
+.newflow-ia-card-dragging {
     opacity: 0.5;
 }
 
-.newflow-cl-card-drop-target {
+.newflow-ia-card-drop-target {
     border-color: #a78bfa;
 }
-.newflow-cl-drop-above {
+.newflow-ia-drop-above {
     box-shadow: inset 0 3px 0 #a78bfa;
 }
-.newflow-cl-drop-below {
+.newflow-ia-drop-below {
     box-shadow: inset 0 -3px 0 #a78bfa;
 }
 
 /* ---------- header ---------- */
-.newflow-cl-card-head {
+.newflow-ia-card-head {
     display: flex;
     align-items: center;
     gap: 6px;
 }
 
-.newflow-cl-handle {
+.newflow-ia-handle {
     cursor: grab;
     user-select: none;
     color: var(--input-text, #aaa);
@@ -72,21 +72,21 @@
     padding: 2px 4px;
     border-radius: 3px;
 }
-.newflow-cl-handle:hover {
+.newflow-ia-handle:hover {
     background: var(--border-color, #444);
     color: #fff;
 }
-.newflow-cl-handle:active {
+.newflow-ia-handle:active {
     cursor: grabbing;
 }
 
-.newflow-cl-include {
+.newflow-ia-include {
     display: inline-flex;
     align-items: center;
     cursor: pointer;
     padding: 2px;
 }
-.newflow-cl-include input[type="checkbox"] {
+.newflow-ia-include input[type="checkbox"] {
     width: 14px;
     height: 14px;
     margin: 0;
@@ -94,7 +94,7 @@
     cursor: pointer;
 }
 
-.newflow-cl-label-input {
+.newflow-ia-label-input {
     flex: 1;
     padding: 4px 6px;
     border: 1px solid var(--border-color, #444);
@@ -104,12 +104,12 @@
     font-family: inherit;
     font-size: 12px;
 }
-.newflow-cl-label-input:focus {
+.newflow-ia-label-input:focus {
     border-color: #a78bfa;
     outline: none;
 }
 
-.newflow-cl-remove {
+.newflow-ia-remove {
     width: 22px;
     height: 22px;
     padding: 0;
@@ -122,19 +122,19 @@
     line-height: 1;
     font-family: inherit;
 }
-.newflow-cl-remove:hover {
+.newflow-ia-remove:hover {
     background: rgba(239, 68, 68, 0.2);
     color: #ef4444;
 }
 
 /* ---------- body ---------- */
-.newflow-cl-card-body {
+.newflow-ia-card-body {
     display: flex;
     flex-direction: column;
     gap: 6px;
 }
 
-.newflow-cl-thumb {
+.newflow-ia-thumb {
     position: relative;
     width: 100%;
     height: 220px;
@@ -147,7 +147,7 @@
     justify-content: center;
     transition: border-color 120ms, background 120ms;
 }
-.newflow-cl-thumb img {
+.newflow-ia-thumb img {
     max-width: 100%;
     max-height: 100%;
     width: auto;
@@ -155,7 +155,7 @@
     object-fit: contain;
     user-select: none;
 }
-.newflow-cl-thumb-empty {
+.newflow-ia-thumb-empty {
     font-size: 11px;
     color: var(--input-text, #888);
     opacity: 0.55;
@@ -163,19 +163,19 @@
     padding: 12px;
     text-align: center;
 }
-.newflow-cl-thumb-broken {
+.newflow-ia-thumb-broken {
     font-size: 10px;
     color: var(--input-text, #888);
     opacity: 0.55;
     font-style: italic;
 }
-.newflow-cl-thumb-drop-hover {
+.newflow-ia-thumb-drop-hover {
     border-color: #a78bfa;
     border-style: solid;
     background: rgba(167, 139, 250, 0.08);
 }
 
-.newflow-cl-img-remove {
+.newflow-ia-img-remove {
     position: absolute;
     top: 4px;
     right: 4px;
@@ -196,22 +196,22 @@
     opacity: 0;
     transition: opacity 120ms, background 120ms;
 }
-.newflow-cl-thumb:hover .newflow-cl-img-remove {
+.newflow-ia-thumb:hover .newflow-ia-img-remove {
     opacity: 1;
 }
-.newflow-cl-img-remove:hover {
+.newflow-ia-img-remove:hover {
     background: rgba(239, 68, 68, 0.85);
 }
 
 /* ---------- controls (browse + add) ---------- */
-.newflow-cl-controls {
+.newflow-ia-controls {
     display: flex;
     align-items: center;
     gap: 4px;
     height: 24px;
 }
 
-.newflow-cl-arrow {
+.newflow-ia-arrow {
     width: 24px;
     height: 24px;
     padding: 0;
@@ -227,16 +227,16 @@
     align-items: center;
     justify-content: center;
 }
-.newflow-cl-arrow:hover:not(:disabled) {
+.newflow-ia-arrow:hover:not(:disabled) {
     background: var(--border-color, #444);
     color: #fff;
 }
-.newflow-cl-arrow:disabled {
+.newflow-ia-arrow:disabled {
     opacity: 0.3;
     cursor: not-allowed;
 }
 
-.newflow-cl-counter {
+.newflow-ia-counter {
     font-size: 11px;
     color: var(--input-text, #aaa);
     padding: 0 6px;
@@ -245,7 +245,7 @@
     font-variant-numeric: tabular-nums;
 }
 
-.newflow-cl-add-img-btn {
+.newflow-ia-add-img-btn {
     height: 24px;
     padding: 0 10px;
     border: 1px solid #5b3fb3;
@@ -257,11 +257,11 @@
     font-family: inherit;
     line-height: 1;
 }
-.newflow-cl-add-img-btn:hover:not(:disabled) {
+.newflow-ia-add-img-btn:hover:not(:disabled) {
     background: rgba(167, 139, 250, 0.32);
     color: #fff;
 }
-.newflow-cl-add-img-btn.newflow-cl-uploading {
+.newflow-ia-add-img-btn.newflow-ia-uploading {
     opacity: 0.6;
     cursor: progress;
 }

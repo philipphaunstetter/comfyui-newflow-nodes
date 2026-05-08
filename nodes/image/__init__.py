@@ -1,4 +1,4 @@
-from .clothing import NewflowClothing
+from .image_array import NewflowImageArray
 from .image_batch import NewflowImageBatch
 
-NODES = [NewflowImageBatch, NewflowClothing]
+NODES = [NewflowImageBatch, NewflowImageArray]
