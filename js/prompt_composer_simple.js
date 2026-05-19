@@ -198,6 +198,10 @@ function makeSimpleOutputBlock(node) {
                             lastError = chunk.error + (chunk.detail ? ": " + chunk.detail : "");
                             continue;
                         }
+                        if (typeof chunk.newflow_status === "string") {
+                            setStatus(chunk.newflow_status);
+                            continue;
+                        }
                         const piece =
                             (chunk.message && typeof chunk.message.content === "string"
                                 ? chunk.message.content

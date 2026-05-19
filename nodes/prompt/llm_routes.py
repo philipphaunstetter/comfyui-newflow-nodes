@@ -270,6 +270,54 @@ async def newflow_llm_generate(request: web.Request) -> web.StreamResponse:
     )
     await response.prepare(request)
 
+    async def _write_line(obj: dict) -> None:
+        try:
+            await response.write((json.dumps(obj) + "\n").encode("utf-8"))
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+
+    # Preload the model with a bounded timeout so big models (which may take
+    # minutes to fault into VRAM on first use) get a distinct "loading" phase
+    # instead of tripping the chat stream's sock_read timeout mid-load.
+    await _write_line({"newflow_status": "loading model"})
+    try:
+        preload_timeout = aiohttp.ClientTimeout(total=900)
+        async with aiohttp.ClientSession(timeout=preload_timeout) as s:
+            async with s.post(
+                f"{url}/api/generate",
+                json={"model": model, "prompt": "", "stream": False},
+            ) as r:
+                if r.status != 200:
+                    err_text = await r.text()
+                    await _write_line({
+                        "error": f"Model preload failed (HTTP {r.status})",
+                        "detail": err_text[:500],
+                    })
+                    await response.write_eof()
+                    return response
+                await r.read()
+    except aiohttp.ClientConnectorError as e:
+        await _write_line({
+            "error": f"Cannot reach Ollama at {url}",
+            "detail": str(e),
+        })
+        await response.write_eof()
+        return response
+    except asyncio.TimeoutError:
+        await _write_line({
+            "error": "Model preload timed out after 900s",
+            "detail": f"model={model}",
+        })
+        await response.write_eof()
+        return response
+    except Exception as e:
+        log.exception("newflow_llm_generate preload failed")
+        await _write_line({"error": "Model preload failed", "detail": str(e)})
+        await response.write_eof()
+        return response
+
+    await _write_line({"newflow_status": "streaming"})
+
     try:
         timeout = aiohttp.ClientTimeout(total=None, sock_read=600)
         async with aiohttp.ClientSession(timeout=timeout) as s:
