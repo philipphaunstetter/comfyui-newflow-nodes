@@ -279,13 +279,23 @@ async def newflow_llm_generate(request: web.Request) -> web.StreamResponse:
     # Preload the model with a bounded timeout so big models (which may take
     # minutes to fault into VRAM on first use) get a distinct "loading" phase
     # instead of tripping the chat stream's sock_read timeout mid-load.
+    # Forward `options` (esp. num_ctx) so the preload exercises the same
+    # memory footprint as the upcoming chat call — otherwise Ollama loads
+    # with the model's native context, which for long-context models can be
+    # 2M+ tokens and blow past available memory.
     await _write_line({"newflow_status": "loading model"})
+    preload_payload = {
+        "model": model,
+        "prompt": "",
+        "stream": False,
+        "options": options,
+    }
     try:
         preload_timeout = aiohttp.ClientTimeout(total=900)
         async with aiohttp.ClientSession(timeout=preload_timeout) as s:
             async with s.post(
                 f"{url}/api/generate",
-                json={"model": model, "prompt": "", "stream": False},
+                json=preload_payload,
             ) as r:
                 if r.status != 200:
                     err_text = await r.text()
