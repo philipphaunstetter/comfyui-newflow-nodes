@@ -329,7 +329,7 @@ async def newflow_llm_generate(request: web.Request) -> web.StreamResponse:
     await _write_line({"newflow_status": "streaming"})
 
     try:
-        timeout = aiohttp.ClientTimeout(total=None, sock_read=600)
+        timeout = aiohttp.ClientTimeout(total=None, sock_read=1800)
         async with aiohttp.ClientSession(timeout=timeout) as s:
             async with s.post(f"{url}/api/chat", json=payload) as r:
                 if r.status != 200:
