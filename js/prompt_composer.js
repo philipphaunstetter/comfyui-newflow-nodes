@@ -243,7 +243,7 @@ function collectImageFileRefs(composerNode) {
     return refs;
 }
 
-export async function preloadImageCache(composerNode) {
+export async function preloadImageCache(composerNode, { signal } = {}) {
     const refs = collectImageFileRefs(composerNode);
     if (refs.length === 0) return { cached: 0, skipped: [] };
     const resp = await fetch("/newflow/llm/cache_files", {
@@ -253,6 +253,7 @@ export async function preloadImageCache(composerNode) {
             node_id: String(composerNode.id),
             files: refs,
         }),
+        signal,
     });
     if (!resp.ok) {
         throw new Error(`Image preload failed (HTTP ${resp.status})`);
@@ -1223,122 +1224,140 @@ function makeOutputBlock(node, ctx) {
         const userText = resolveTextForLlm(ctx.getUserText?.() || "", ctx.values || {});
         const systemText = resolveTextForLlm(ctx.getSystemText?.() || "", ctx.values || {});
 
-        // Pre-flight healthcheck so we fail fast with a clear error.
+        // Activate the running UI immediately so the button reads "Stop" and
+        // the status badge updates during the preflight phases (healthcheck +
+        // image preload), not only once the chat stream starts. abortCtrl is
+        // wired up early so Stop is functional from t=0.
+        abortCtrl = new AbortController();
+        setStreaming(true);
+        setStatus("checking ollama");
+
         try {
-            const h = await fetch(
-                `/newflow/llm/healthz?url=${encodeURIComponent(state.settings.ollama_url)}`,
-            );
-            if (!h.ok) {
-                const err = await h.json().catch(() => ({}));
-                const msg = `Ollama not reachable at ${state.settings.ollama_url}: ${err.error || `HTTP ${h.status}`}`;
+            // Pre-flight healthcheck so we fail fast with a clear error.
+            try {
+                const h = await fetch(
+                    `/newflow/llm/healthz?url=${encodeURIComponent(state.settings.ollama_url)}`,
+                    { signal: abortCtrl.signal },
+                );
+                if (!h.ok) {
+                    const err = await h.json().catch(() => ({}));
+                    const msg = `Ollama not reachable at ${state.settings.ollama_url}: ${err.error || `HTTP ${h.status}`}`;
+                    if (!silent) alert(msg);
+                    throw wrapErr(msg);
+                }
+            } catch (e) {
+                if (e.name === "AbortError") {
+                    setStatus("stopped");
+                    throw wrapErr("Generation aborted", "AbortError");
+                }
+                if (e.nodeTitle) throw e; // already wrapped
+                const msg = `Ollama not reachable: ${e.message || e}`;
                 if (!silent) alert(msg);
                 throw wrapErr(msg);
             }
-        } catch (e) {
-            if (e.nodeTitle) throw e; // already wrapped
-            const msg = `Ollama not reachable: ${e.message || e}`;
-            if (!silent) alert(msg);
-            throw wrapErr(msg);
-        }
 
-        // JIT image cache populator — walk upstream image sources and load
-        // their files into IMAGE_CACHE so we don't need a workflow run first.
-        try {
-            await preloadImageCache(node);
-            // Refresh the badge immediately so the UI reflects the new cache.
-            ctx.refreshImageBadgeNow?.();
-        } catch (e) {
-            // Non-fatal: log the failure and proceed; the LLM may just get
-            // fewer images than expected.
-            console.warn("Newflow: image preload failed:", e);
-        }
-
-        editor.textContent = "";
-        state.text = "";
-        ctx.notifyChanged?.();
-        setStatus("streaming");
-        setStreaming(true);
-
-        abortCtrl = new AbortController();
-        try {
-            const resp = await fetch("/newflow/llm/generate", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    model: state.settings.model,
-                    user: userText,
-                    system: systemText,
-                    options: {
-                        temperature: state.settings.temperature,
-                        num_predict: state.settings.max_tokens,
-                        top_p: state.settings.top_p,
-                        num_ctx: state.settings.num_ctx,
-                    },
-                    ollama_url: state.settings.ollama_url,
-                    node_id: String(node.id ?? ""),
-                }),
-                signal: abortCtrl.signal,
-            });
-            if (!resp.ok || !resp.body) {
-                const txt = await resp.text().catch(() => "");
-                throw new Error(`HTTP ${resp.status}${txt ? ": " + txt : ""}`);
+            // JIT image cache populator — walk upstream image sources and load
+            // their files into IMAGE_CACHE so we don't need a workflow run first.
+            setStatus("loading images");
+            try {
+                await preloadImageCache(node, { signal: abortCtrl.signal });
+                // Refresh the badge immediately so the UI reflects the new cache.
+                ctx.refreshImageBadgeNow?.();
+            } catch (e) {
+                if (e.name === "AbortError") {
+                    setStatus("stopped");
+                    throw wrapErr("Generation aborted", "AbortError");
+                }
+                // Non-fatal: log the failure and proceed; the LLM may just get
+                // fewer images than expected.
+                console.warn("Newflow: image preload failed:", e);
             }
-            const reader = resp.body.getReader();
-            const decoder = new TextDecoder();
-            let buf = "";
-            let lastError = null;
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                buf += decoder.decode(value, { stream: true });
-                let nl;
-                while ((nl = buf.indexOf("\n")) >= 0) {
-                    const line = buf.slice(0, nl).trim();
-                    buf = buf.slice(nl + 1);
-                    if (!line) continue;
-                    try {
-                        const chunk = JSON.parse(line);
-                        if (chunk.error) {
-                            lastError = chunk.error + (chunk.detail ? ": " + chunk.detail : "");
-                            continue;
+
+            editor.textContent = "";
+            state.text = "";
+            ctx.notifyChanged?.();
+            setStatus("streaming");
+
+            try {
+                const resp = await fetch("/newflow/llm/generate", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        model: state.settings.model,
+                        user: userText,
+                        system: systemText,
+                        options: {
+                            temperature: state.settings.temperature,
+                            num_predict: state.settings.max_tokens,
+                            top_p: state.settings.top_p,
+                            num_ctx: state.settings.num_ctx,
+                        },
+                        ollama_url: state.settings.ollama_url,
+                        node_id: String(node.id ?? ""),
+                    }),
+                    signal: abortCtrl.signal,
+                });
+                if (!resp.ok || !resp.body) {
+                    const txt = await resp.text().catch(() => "");
+                    throw new Error(`HTTP ${resp.status}${txt ? ": " + txt : ""}`);
+                }
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let buf = "";
+                let lastError = null;
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    buf += decoder.decode(value, { stream: true });
+                    let nl;
+                    while ((nl = buf.indexOf("\n")) >= 0) {
+                        const line = buf.slice(0, nl).trim();
+                        buf = buf.slice(nl + 1);
+                        if (!line) continue;
+                        try {
+                            const chunk = JSON.parse(line);
+                            if (chunk.error) {
+                                lastError = chunk.error + (chunk.detail ? ": " + chunk.detail : "");
+                                continue;
+                            }
+                            if (typeof chunk.newflow_status === "string") {
+                                setStatus(chunk.newflow_status);
+                                continue;
+                            }
+                            const piece =
+                                (chunk.message && typeof chunk.message.content === "string"
+                                    ? chunk.message.content
+                                    : null) ??
+                                (typeof chunk.response === "string" ? chunk.response : null);
+                            if (piece) {
+                                state.text += piece;
+                                editor.textContent = state.text;
+                                editor.scrollTop = editor.scrollHeight;
+                            }
+                        } catch {
+                            // ignore malformed JSON lines
                         }
-                        if (typeof chunk.newflow_status === "string") {
-                            setStatus(chunk.newflow_status);
-                            continue;
-                        }
-                        const piece =
-                            (chunk.message && typeof chunk.message.content === "string"
-                                ? chunk.message.content
-                                : null) ??
-                            (typeof chunk.response === "string" ? chunk.response : null);
-                        if (piece) {
-                            state.text += piece;
-                            editor.textContent = state.text;
-                            editor.scrollTop = editor.scrollHeight;
-                        }
-                    } catch {
-                        // ignore malformed JSON lines
                     }
                 }
+                ctx.notifyChanged?.();
+                if (lastError) {
+                    setStatus("error");
+                    if (!silent) alert(`Generation failed: ${lastError}`);
+                    throw wrapErr(lastError);
+                }
+                setStatus("done");
+            } catch (e) {
+                if (e.name === "AbortError") {
+                    setStatus("stopped");
+                    throw wrapErr("Generation aborted", "AbortError");
+                }
+                if (!e.nodeTitle) {
+                    setStatus("error");
+                    if (!silent) alert(`Generation failed: ${e.message || e}`);
+                    throw wrapErr(e.message || String(e));
+                }
+                throw e;
             }
-            ctx.notifyChanged?.();
-            if (lastError) {
-                setStatus("error");
-                if (!silent) alert(`Generation failed: ${lastError}`);
-                throw wrapErr(lastError);
-            }
-            setStatus("done");
-        } catch (e) {
-            if (e.name === "AbortError") {
-                setStatus("stopped");
-                throw wrapErr("Generation aborted", "AbortError");
-            }
-            if (!e.nodeTitle) {
-                setStatus("error");
-                if (!silent) alert(`Generation failed: ${e.message || e}`);
-                throw wrapErr(e.message || String(e));
-            }
-            throw e;
         } finally {
             abortCtrl = null;
             setStreaming(false);

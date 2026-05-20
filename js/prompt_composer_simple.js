@@ -125,116 +125,134 @@ function makeSimpleOutputBlock(node) {
             throw wrapErr("No model selected — open settings and pick one.");
         }
 
+        // Activate the running UI immediately so the button reads "Stop" and
+        // the status badge updates during the preflight phases (healthcheck +
+        // image preload), not only once the chat stream starts. abortCtrl is
+        // wired up early so Stop is functional from t=0.
+        abortCtrl = new AbortController();
+        setStreaming(true);
+        setStatus("checking ollama");
+
         try {
-            const h = await fetch(
-                `/newflow/llm/healthz?url=${encodeURIComponent(state.settings.ollama_url)}`,
-            );
-            if (!h.ok) {
-                const err = await h.json().catch(() => ({}));
-                const msg = `Ollama not reachable at ${state.settings.ollama_url}: ${err.error || `HTTP ${h.status}`}`;
+            try {
+                const h = await fetch(
+                    `/newflow/llm/healthz?url=${encodeURIComponent(state.settings.ollama_url)}`,
+                    { signal: abortCtrl.signal },
+                );
+                if (!h.ok) {
+                    const err = await h.json().catch(() => ({}));
+                    const msg = `Ollama not reachable at ${state.settings.ollama_url}: ${err.error || `HTTP ${h.status}`}`;
+                    if (!silent) alert(msg);
+                    throw wrapErr(msg);
+                }
+            } catch (e) {
+                if (e.name === "AbortError") {
+                    setStatus("stopped");
+                    throw wrapErr("Generation aborted", "AbortError");
+                }
+                if (e.nodeTitle) throw e;
+                const msg = `Ollama not reachable: ${e.message || e}`;
                 if (!silent) alert(msg);
                 throw wrapErr(msg);
             }
-        } catch (e) {
-            if (e.nodeTitle) throw e;
-            const msg = `Ollama not reachable: ${e.message || e}`;
-            if (!silent) alert(msg);
-            throw wrapErr(msg);
-        }
 
-        try {
-            await preloadImageCache(node);
-            await refreshImageBadge();
-        } catch (e) {
-            console.warn("Newflow: image preload failed:", e);
-        }
-
-        editor.value = "";
-        state.text = "";
-        onChanged();
-        setStatus("streaming");
-        setStreaming(true);
-
-        abortCtrl = new AbortController();
-        try {
-            const resp = await fetch("/newflow/llm/generate", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    model: state.settings.model,
-                    user: readUserText(),
-                    system: readSystemText(),
-                    options: {
-                        temperature: state.settings.temperature,
-                        num_predict: state.settings.max_tokens,
-                        top_p: state.settings.top_p,
-                        num_ctx: state.settings.num_ctx,
-                    },
-                    ollama_url: state.settings.ollama_url,
-                    node_id: String(node.id ?? ""),
-                }),
-                signal: abortCtrl.signal,
-            });
-            if (!resp.ok || !resp.body) {
-                const txt = await resp.text().catch(() => "");
-                throw new Error(`HTTP ${resp.status}${txt ? ": " + txt : ""}`);
+            setStatus("loading images");
+            try {
+                await preloadImageCache(node, { signal: abortCtrl.signal });
+                await refreshImageBadge();
+            } catch (e) {
+                if (e.name === "AbortError") {
+                    setStatus("stopped");
+                    throw wrapErr("Generation aborted", "AbortError");
+                }
+                console.warn("Newflow: image preload failed:", e);
             }
-            const reader = resp.body.getReader();
-            const decoder = new TextDecoder();
-            let buf = "";
-            let lastError = null;
-            while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
-                buf += decoder.decode(value, { stream: true });
-                let nl;
-                while ((nl = buf.indexOf("\n")) >= 0) {
-                    const line = buf.slice(0, nl).trim();
-                    buf = buf.slice(nl + 1);
-                    if (!line) continue;
-                    try {
-                        const chunk = JSON.parse(line);
-                        if (chunk.error) {
-                            lastError = chunk.error + (chunk.detail ? ": " + chunk.detail : "");
-                            continue;
+
+            editor.value = "";
+            state.text = "";
+            onChanged();
+            setStatus("streaming");
+
+            try {
+                const resp = await fetch("/newflow/llm/generate", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        model: state.settings.model,
+                        user: readUserText(),
+                        system: readSystemText(),
+                        options: {
+                            temperature: state.settings.temperature,
+                            num_predict: state.settings.max_tokens,
+                            top_p: state.settings.top_p,
+                            num_ctx: state.settings.num_ctx,
+                        },
+                        ollama_url: state.settings.ollama_url,
+                        node_id: String(node.id ?? ""),
+                    }),
+                    signal: abortCtrl.signal,
+                });
+                if (!resp.ok || !resp.body) {
+                    const txt = await resp.text().catch(() => "");
+                    throw new Error(`HTTP ${resp.status}${txt ? ": " + txt : ""}`);
+                }
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let buf = "";
+                let lastError = null;
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    buf += decoder.decode(value, { stream: true });
+                    let nl;
+                    while ((nl = buf.indexOf("\n")) >= 0) {
+                        const line = buf.slice(0, nl).trim();
+                        buf = buf.slice(nl + 1);
+                        if (!line) continue;
+                        try {
+                            const chunk = JSON.parse(line);
+                            if (chunk.error) {
+                                lastError = chunk.error + (chunk.detail ? ": " + chunk.detail : "");
+                                continue;
+                            }
+                            if (typeof chunk.newflow_status === "string") {
+                                setStatus(chunk.newflow_status);
+                                continue;
+                            }
+                            const piece =
+                                (chunk.message && typeof chunk.message.content === "string"
+                                    ? chunk.message.content
+                                    : null) ??
+                                (typeof chunk.response === "string" ? chunk.response : null);
+                            if (piece) {
+                                state.text += piece;
+                                editor.value = state.text;
+                                editor.scrollTop = editor.scrollHeight;
+                            }
+                        } catch {
+                            // ignore malformed JSON
                         }
-                        if (typeof chunk.newflow_status === "string") {
-                            setStatus(chunk.newflow_status);
-                            continue;
-                        }
-                        const piece =
-                            (chunk.message && typeof chunk.message.content === "string"
-                                ? chunk.message.content
-                                : null) ??
-                            (typeof chunk.response === "string" ? chunk.response : null);
-                        if (piece) {
-                            state.text += piece;
-                            editor.value = state.text;
-                            editor.scrollTop = editor.scrollHeight;
-                        }
-                    } catch {
-                        // ignore malformed JSON
                     }
                 }
+                onChanged();
+                if (lastError) {
+                    setStatus("error");
+                    if (!silent) alert(`Generation failed: ${lastError}`);
+                    throw wrapErr(lastError);
+                }
+                setStatus("done");
+            } catch (e) {
+                if (e.name === "AbortError") {
+                    setStatus("stopped");
+                    throw wrapErr("Generation aborted", "AbortError");
+                }
+                if (!e.nodeTitle) {
+                    setStatus("error");
+                    if (!silent) alert(`Generation failed: ${e.message || e}`);
+                    throw wrapErr(e.message || String(e));
+                }
+                throw e;
             }
-            onChanged();
-            if (lastError) {
-                setStatus("error");
-                if (!silent) alert(`Generation failed: ${lastError}`);
-                throw wrapErr(lastError);
-            }
-            setStatus("done");
-        } catch (e) {
-            if (e.name === "AbortError") {
-                setStatus("stopped");
-                throw wrapErr("Generation aborted", "AbortError");
-            }
-            if (!e.nodeTitle) {
-                setStatus("error");
-                if (!silent) alert(`Generation failed: ${e.message || e}`);
-                throw wrapErr(e.message || String(e));
-            }
-            throw e;
         } finally {
             abortCtrl = null;
             setStreaming(false);
