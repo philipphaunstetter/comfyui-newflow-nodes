@@ -200,6 +200,12 @@ function makeSimpleOutputBlock(node) {
                 const decoder = new TextDecoder();
                 let buf = "";
                 let lastError = null;
+                // Reasoning models (Qwen3, deepseek-r1, etc.) emit chunks with
+                // `message.thinking` that may never transition to `message.content`.
+                // Accumulate both separately; the canonical output is `content` if
+                // the model ever emits any, otherwise the `thinking` text.
+                let thinkingText = "";
+                let contentText = "";
                 while (true) {
                     const { value, done } = await reader.read();
                     if (done) break;
@@ -219,13 +225,18 @@ function makeSimpleOutputBlock(node) {
                                 setStatus(chunk.newflow_status);
                                 continue;
                             }
-                            const piece =
+                            const thinking = chunk.message && typeof chunk.message.thinking === "string"
+                                ? chunk.message.thinking
+                                : "";
+                            const content =
                                 (chunk.message && typeof chunk.message.content === "string"
                                     ? chunk.message.content
-                                    : null) ??
-                                (typeof chunk.response === "string" ? chunk.response : null);
-                            if (piece) {
-                                state.text += piece;
+                                    : "") ||
+                                (typeof chunk.response === "string" ? chunk.response : "");
+                            if (thinking) thinkingText += thinking;
+                            if (content) contentText += content;
+                            if (thinking || content) {
+                                state.text = contentText || thinkingText;
                                 editor.value = state.text;
                                 editor.scrollTop = editor.scrollHeight;
                             }
