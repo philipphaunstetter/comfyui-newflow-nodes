@@ -234,6 +234,7 @@ async def newflow_llm_generate(request: web.Request) -> web.StreamResponse:
     user = body.get("user", "")
     system = body.get("system", "")
     options = body.get("options", {}) or {}
+    think = body.get("think")
     url = _resolve_url(body.get("ollama_url"))
 
     if not model or not isinstance(model, str):
@@ -259,6 +260,8 @@ async def newflow_llm_generate(request: web.Request) -> web.StreamResponse:
         "stream": True,
         "options": options,
     }
+    if isinstance(think, bool):
+        payload["think"] = think
 
     response = web.StreamResponse(
         status=200,

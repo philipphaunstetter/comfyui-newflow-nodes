@@ -23,6 +23,7 @@ export const DEFAULT_LLM_SETTINGS = {
     max_tokens: 4096,
     top_p: 0.9,
     num_ctx: 8192,
+    think: true,
     auto_regen: false,
     auto_run_after_gen: true,
 };
@@ -981,6 +982,10 @@ export function openLlmSettings(currentSettings) {
                     <input type="number" name="num_ctx" min="512" max="131072" step="512" />
                 </label>
                 <label class="newflow-pc-checkbox-row">
+                    <input type="checkbox" name="think" />
+                    <span>Thinking mode (reasoning models — uncheck for raw output)</span>
+                </label>
+                <label class="newflow-pc-checkbox-row">
                     <input type="checkbox" name="auto_regen" />
                     <span>Auto-generate on workflow run</span>
                 </label>
@@ -1007,6 +1012,7 @@ export function openLlmSettings(currentSettings) {
         const topPInput = $('[name="top_p"]');
         const topPVal = $(".newflow-pc-top-p-val");
         const ctxInput = $('[name="num_ctx"]');
+        const thinkInput = $('[name="think"]');
         const autoRegenInput = $('[name="auto_regen"]');
         const autoRunAfterGenInput = $('[name="auto_run_after_gen"]');
         const urlStatus = $(".newflow-pc-url-status");
@@ -1023,6 +1029,7 @@ export function openLlmSettings(currentSettings) {
         topPInput.value = merged.top_p;
         topPVal.textContent = String(merged.top_p);
         ctxInput.value = merged.num_ctx;
+        thinkInput.checked = merged.think !== false;
         autoRegenInput.checked = !!merged.auto_regen;
         autoRunAfterGenInput.checked = merged.auto_run_after_gen !== false;
 
@@ -1110,6 +1117,7 @@ export function openLlmSettings(currentSettings) {
                 max_tokens: Number.isFinite(parseInt(maxInput.value, 10)) ? parseInt(maxInput.value, 10) : DEFAULT_LLM_SETTINGS.max_tokens,
                 top_p: parseFloat(topPInput.value),
                 num_ctx: parseInt(ctxInput.value, 10) || DEFAULT_LLM_SETTINGS.num_ctx,
+                think: !!thinkInput.checked,
                 auto_regen: !!autoRegenInput.checked,
                 auto_run_after_gen: !!autoRunAfterGenInput.checked,
             });
@@ -1292,6 +1300,7 @@ function makeOutputBlock(node, ctx) {
                             top_p: state.settings.top_p,
                             num_ctx: state.settings.num_ctx,
                         },
+                        think: state.settings.think !== false,
                         ollama_url: state.settings.ollama_url,
                         node_id: String(node.id ?? ""),
                     }),

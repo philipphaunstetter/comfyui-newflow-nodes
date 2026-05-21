@@ -187,6 +187,7 @@ function makeSimpleOutputBlock(node) {
                             top_p: state.settings.top_p,
                             num_ctx: state.settings.num_ctx,
                         },
+                        think: state.settings.think !== false,
                         ollama_url: state.settings.ollama_url,
                         node_id: String(node.id ?? ""),
                     }),
