@@ -10,13 +10,17 @@ NUM_SKILL_SLOTS = 6
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 LLM_SETTINGS_WIDGET = "llm_settings_state"
 
-# Prepended to the assembled skill bodies so the model knows to follow
-# skill instructions precisely and produce only the specified output format.
-SKILL_PREAMBLE = (
-    "You are an assistant that strictly follows skill instructions. "
-    "Produce ONLY the output format the skill specifies — "
-    "no preamble, no explanation, no commentary outside the format.\n\n"
-)
+# Prepended to the assembled skill bodies so the model executes them as
+# strict instructions rather than conversational suggestions.
+SKILL_PREAMBLE = """\
+SYSTEM RULES — obey without exception:
+1. Execute the skill instructions below. Produce ONLY the output format they specify.
+2. Never add preamble, explanation, tips, commentary, closing remarks, or follow-up questions.
+3. Never say you cannot do something. Never offer alternatives. Just execute.
+4. If the skill output format is JSON, your ENTIRE response must be raw valid JSON — nothing before or after it, no markdown code fences.
+
+SKILL INSTRUCTIONS:
+"""
 
 
 class NewflowSkillPrompt(io.ComfyNode):
