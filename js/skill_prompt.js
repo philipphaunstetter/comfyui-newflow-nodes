@@ -18,24 +18,25 @@ app.registerExtension({
             let settings = { ...DEFAULT_LLM_SETTINGS };
 
             const host = document.createElement("div");
-            host.style.cssText =
-                "display:flex;align-items:center;gap:6px;padding:4px 8px;box-sizing:border-box;width:100%;";
+            host.className = "newflow-pc-llm-head";
+            host.style.cssText = "padding:4px 6px;box-sizing:border-box;width:100%;";
+
+            const modelLabel = document.createElement("span");
+            modelLabel.className = "newflow-pc-title";
+            modelLabel.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
 
             const settingsBtn = document.createElement("button");
             settingsBtn.type = "button";
             settingsBtn.className = "newflow-pc-settings-btn";
-            settingsBtn.textContent = "⚙ LLM Settings";
-
-            const modelLabel = document.createElement("span");
-            modelLabel.style.cssText =
-                "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:0.6;font-size:0.85em;";
+            settingsBtn.textContent = "⚙";
+            settingsBtn.title = "LLM settings";
 
             const refreshLabel = () => {
-                modelLabel.textContent = settings.model || "(no model selected)";
+                modelLabel.textContent = settings.model || "(no model)";
             };
             refreshLabel();
 
-            host.append(settingsBtn, modelLabel);
+            host.append(modelLabel, settingsBtn);
 
             const settingsWidget = node.addDOMWidget(
                 LLM_SETTINGS_WIDGET,
