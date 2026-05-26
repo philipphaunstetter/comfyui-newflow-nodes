@@ -88,7 +88,24 @@ class NewflowSkillPrompt(io.ComfyNode):
         if skills:
             system_content = SKILL_PREAMBLE + "\n\n---\n\n".join(skills)
             messages.append({"role": "system", "content": system_content})
-        messages.append({"role": "user", "content": user_prompt or ""})
+
+        # Frame the user turn as an explicit execution command so the model
+        # doesn't default to a conversational response.
+        user_content = user_prompt or ""
+        if skills and user_content:
+            user_content = (
+                f"Execute the skill for this input. "
+                f"Output ONLY the format the skill specifies, nothing else:\n\n{user_content}"
+            )
+        messages.append({"role": "user", "content": user_content})
+
+        # Assistant prefill: seed the reply with the first character of the
+        # expected output so the model must continue it rather than opening
+        # with conversational text. Only applied when skills are active.
+        prefill = ""
+        if skills:
+            prefill = "{"
+            messages.append({"role": "assistant", "content": prefill})
 
         payload = {"model": model, "messages": messages, "stream": False}
 
@@ -101,7 +118,11 @@ class NewflowSkillPrompt(io.ComfyNode):
             )
             with urllib.request.urlopen(req, timeout=300) as resp:
                 result = json.loads(resp.read())
-            return io.NodeOutput(result.get("message", {}).get("content", ""))
+            content = result.get("message", {}).get("content", "")
+            # Re-attach the prefill character the model continued from.
+            if prefill:
+                content = prefill + content
+            return io.NodeOutput(content)
         except urllib.error.HTTPError as e:
             body = e.read(500).decode("utf-8", errors="replace")
             return io.NodeOutput(f"[HTTP {e.code}: {body}]")
