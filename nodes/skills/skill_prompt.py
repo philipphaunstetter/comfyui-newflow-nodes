@@ -10,6 +10,14 @@ NUM_SKILL_SLOTS = 6
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 LLM_SETTINGS_WIDGET = "llm_settings_state"
 
+# Prepended to the assembled skill bodies so the model knows to follow
+# skill instructions precisely and produce only the specified output format.
+SKILL_PREAMBLE = (
+    "You are an assistant that strictly follows skill instructions. "
+    "Produce ONLY the output format the skill specifies — "
+    "no preamble, no explanation, no commentary outside the format.\n\n"
+)
+
 
 class NewflowSkillPrompt(io.ComfyNode):
     @classmethod
@@ -74,7 +82,8 @@ class NewflowSkillPrompt(io.ComfyNode):
 
         messages = []
         if skills:
-            messages.append({"role": "system", "content": "\n\n---\n\n".join(skills)})
+            system_content = SKILL_PREAMBLE + "\n\n---\n\n".join(skills)
+            messages.append({"role": "system", "content": system_content})
         messages.append({"role": "user", "content": user_prompt or ""})
 
         payload = {"model": model, "messages": messages, "stream": False}
