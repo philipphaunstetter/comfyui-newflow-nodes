@@ -61,6 +61,8 @@ class NewflowSkillPrompt(io.ComfyNode):
 
     @classmethod
     def execute(cls, user_prompt="", **kwargs):
+        _kwargs_debug = {k: (repr(v)[:80] if v is not None else "None") for k, v in kwargs.items()}
+
         prompt = cls.hidden.prompt or {}
         unique_id = str(cls.hidden.unique_id)
         node_inputs = prompt.get(unique_id, {}).get("inputs", {})
@@ -120,7 +122,9 @@ class NewflowSkillPrompt(io.ComfyNode):
             payload["think"] = False
 
         system_debug = next(
-            (m["content"] for m in messages if m["role"] == "system"), ""
+            (m["content"] for m in messages if m["role"] == "system"),
+            f"[no system prompt built — kwargs keys: {list(_kwargs_debug.keys())}]\n\nkwargs values:\n"
+            + "\n".join(f"  {k}: {v}" for k, v in _kwargs_debug.items()),
         )
 
         try:
