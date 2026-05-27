@@ -54,6 +54,7 @@ class NewflowSkillPrompt(io.ComfyNode):
             ],
             outputs=[
                 io.String.Output("OUTPUT"),
+                io.String.Output("SYSTEM"),
             ],
             hidden=[io.Hidden.prompt, io.Hidden.unique_id],
         )
@@ -118,6 +119,10 @@ class NewflowSkillPrompt(io.ComfyNode):
             # demands raw JSON.
             payload["think"] = False
 
+        system_debug = next(
+            (m["content"] for m in messages if m["role"] == "system"), ""
+        )
+
         try:
             req = urllib.request.Request(
                 f"{ollama_url}/api/chat",
@@ -127,11 +132,11 @@ class NewflowSkillPrompt(io.ComfyNode):
             )
             with urllib.request.urlopen(req, timeout=300) as resp:
                 result = json.loads(resp.read())
-            return io.NodeOutput(result.get("message", {}).get("content", ""))
+            return io.NodeOutput(result.get("message", {}).get("content", ""), system_debug)
         except urllib.error.HTTPError as e:
             body = e.read(500).decode("utf-8", errors="replace")
-            return io.NodeOutput(f"[HTTP {e.code}: {body}]")
+            return io.NodeOutput(f"[HTTP {e.code}: {body}]", system_debug)
         except urllib.error.URLError as e:
-            return io.NodeOutput(f"[Cannot reach Ollama at {ollama_url}: {e.reason}]")
+            return io.NodeOutput(f"[Cannot reach Ollama at {ollama_url}: {e.reason}]", system_debug)
         except Exception as e:
-            return io.NodeOutput(f"[Error: {e}]")
+            return io.NodeOutput(f"[Error: {e}]", system_debug)
