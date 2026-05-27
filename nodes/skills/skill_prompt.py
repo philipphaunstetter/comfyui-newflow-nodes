@@ -13,13 +13,14 @@ LLM_SETTINGS_WIDGET = "llm_settings_state"
 # Prepended to the assembled skill bodies so the model executes them as
 # strict instructions rather than conversational suggestions.
 SKILL_PREAMBLE = """\
-SYSTEM RULES — obey without exception:
-1. Execute the skill instructions below. Produce ONLY the output format they specify.
-2. Never add preamble, explanation, tips, commentary, closing remarks, or follow-up questions.
-3. Never say you cannot do something. Never offer alternatives. Just execute.
-4. If the skill output format is JSON, your ENTIRE response must be raw valid JSON — nothing before or after it, no markdown code fences.
+YOU ARE IN TASK-EXECUTION MODE. Rules:
+1. The section below is your TASK DEFINITION — not a guide, not context, not a lesson. Execute it.
+2. Output ONLY the exact format the task specifies. If it specifies JSON, output raw JSON only.
+3. Do NOT add preamble, explanation, alternatives, tips, or closing remarks of any kind.
+4. Do NOT say "I cannot" or "as an AI". You are an executor. Execute the task now.
+5. The output format defined in the task is mandatory and non-negotiable.
 
-SKILL INSTRUCTIONS:
+TASK DEFINITION:
 """
 
 
