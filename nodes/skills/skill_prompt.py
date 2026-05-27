@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import base64
 import json
 import urllib.error
 import urllib.request
+from io import BytesIO
+
+import numpy as np
+from PIL import Image as PILImage
 
 from comfy_api.latest import io
 
 NUM_SKILL_SLOTS = 6
+NUM_IMAGE_SLOTS = 4
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 LLM_SETTINGS_WIDGET = "llm_settings_state"
 
-# Prepended to the assembled skill bodies so the model executes them as
-# strict instructions rather than conversational suggestions.
 SKILL_PREAMBLE = """\
 YOU ARE IN TASK-EXECUTION MODE. Rules:
 1. The section below is your TASK DEFINITION — not a guide, not context, not a lesson. Execute it.
@@ -24,6 +28,15 @@ TASK DEFINITION:
 """
 
 
+def _tensor_to_base64(tensor) -> str:
+    arr = tensor[0].cpu().numpy()
+    arr = (arr * 255).clip(0, 255).astype(np.uint8)
+    img = PILImage.fromarray(arr)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
 class NewflowSkillPrompt(io.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -33,7 +46,8 @@ class NewflowSkillPrompt(io.ComfyNode):
             category="newflow/skills",
             description=(
                 "Combines connected skill bodies as a system prompt and sends a "
-                "user message to Ollama. Skills are joined with \\n\\n---\\n\\n."
+                "user message to Ollama. Skills are joined with \\n\\n---\\n\\n. "
+                "Optional images are forwarded to vision-capable models."
             ),
             inputs=[
                 io.Autogrow.Input(
@@ -41,6 +55,14 @@ class NewflowSkillPrompt(io.ComfyNode):
                     template=io.Autogrow.TemplateNames(
                         input=io.String.Input("skill", optional=True),
                         names=[f"skill_{i + 1}" for i in range(NUM_SKILL_SLOTS)],
+                        min=1,
+                    ),
+                ),
+                io.Autogrow.Input(
+                    "images",
+                    template=io.Autogrow.TemplateNames(
+                        input=io.Image.Input("image", optional=True),
+                        names=[f"image_{i + 1}" for i in range(NUM_IMAGE_SLOTS)],
                         min=1,
                     ),
                 ),
@@ -61,8 +83,6 @@ class NewflowSkillPrompt(io.ComfyNode):
 
     @classmethod
     def execute(cls, user_prompt="", **kwargs):
-        _kwargs_debug = {k: (repr(v)[:80] if v is not None else "None") for k, v in kwargs.items()}
-
         prompt = cls.hidden.prompt or {}
         unique_id = str(cls.hidden.unique_id)
         node_inputs = prompt.get(unique_id, {}).get("inputs", {})
@@ -90,16 +110,28 @@ class NewflowSkillPrompt(io.ComfyNode):
             options["top_p"] = float(raw["top_p"])
 
         if not model:
-            return io.NodeOutput("[error: no model selected — open ⚙ LLM Settings]")
+            return io.NodeOutput("[error: no model selected — open ⚙ LLM Settings]", "")
 
         skills_dict = kwargs.get("skills") or {}
-        if isinstance(skills_dict, str):
+        if not isinstance(skills_dict, dict):
             skills_dict = {}
         skills = []
         for i in range(NUM_SKILL_SLOTS):
             s = skills_dict.get(f"skill_{i + 1}")
             if s and isinstance(s, str) and s.strip():
                 skills.append(s.strip())
+
+        images_dict = kwargs.get("images") or {}
+        if not isinstance(images_dict, dict):
+            images_dict = {}
+        image_b64s = []
+        for i in range(NUM_IMAGE_SLOTS):
+            t = images_dict.get(f"image_{i + 1}")
+            if t is not None:
+                try:
+                    image_b64s.append(_tensor_to_base64(t))
+                except Exception:
+                    pass
 
         messages = []
         if skills:
@@ -112,22 +144,19 @@ class NewflowSkillPrompt(io.ComfyNode):
                 f"Execute the skill for this input. "
                 f"Output ONLY the format the skill specifies, nothing else:\n\n{user_content}"
             )
-        messages.append({"role": "user", "content": user_content})
+
+        user_msg: dict = {"role": "user", "content": user_content}
+        if image_b64s:
+            user_msg["images"] = image_b64s
+        messages.append(user_msg)
 
         payload: dict = {"model": model, "messages": messages, "stream": False, "options": options}
         if skills:
-            # format="json" makes Ollama enforce valid JSON at the engine level —
-            # far more reliable than prompt instructions alone.
             payload["format"] = "json"
-            # Disable thinking mode (Qwen3, deepseek-r1, etc.): thinking
-            # produces a conversational `content` even when the system prompt
-            # demands raw JSON.
             payload["think"] = False
 
         system_debug = next(
-            (m["content"] for m in messages if m["role"] == "system"),
-            f"[no system prompt built — kwargs keys: {list(_kwargs_debug.keys())}]\n\nkwargs values:\n"
-            + "\n".join(f"  {k}: {v}" for k, v in _kwargs_debug.items()),
+            (m["content"] for m in messages if m["role"] == "system"), ""
         )
 
         try:
