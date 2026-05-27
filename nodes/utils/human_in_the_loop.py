@@ -1,9 +1,11 @@
 """NewflowHumanInTheLoop — pause workflow execution and wait for human Approve / Reject.
 
-The node displays the input IMAGE in a custom DOM widget along with two buttons:
-- Approve: passes the image through to the output, workflow continues.
-- Reject: raises InterruptProcessingException so ComfyUI cleanly stops the run.
+The node displays the input IMAGE in a custom DOM widget along with decision buttons:
+- Approve: passes the image through the APPROVED output, workflow continues.
+- Reject (reason N): routes the image to the matching REJECTED_N output without
+  stopping the workflow; other rejection outputs fire None so their branches are skipped.
 
+Up to NUM_REJECTION_SLOTS rejection reason labels can be configured via string inputs.
 `execute()` blocks on a `threading.Event` until JS POSTs the decision to
 /newflow/hitl/decide. We poll comfy.model_management.processing_interrupted() so
 ComfyUI's global Cancel button still works while we're waiting.
@@ -17,7 +19,6 @@ import threading
 import time
 
 import numpy as np
-import torch
 from aiohttp import web
 from PIL import Image
 
@@ -30,11 +31,12 @@ log = logging.getLogger(__name__)
 
 DECISION_TIMEOUT = 600  # 10 minutes
 POLL_INTERVAL = 0.5     # check for cancel every 500 ms
+NUM_REJECTION_SLOTS = 4
 
 
 class NewflowHumanInTheLoop(io.ComfyNode):
     # Module-level waiter registry keyed by node unique_id (string).
-    # value = (threading.Event, dict {"approved": bool|None})
+    # value = (threading.Event, dict {"approved": bool|None, "reason_index": int|None})
     _waiters: dict = {}
 
     @classmethod
@@ -44,19 +46,39 @@ class NewflowHumanInTheLoop(io.ComfyNode):
             display_name="Newflow Human in the Loop",
             category="newflow/utils",
             description=(
-                "Pauses workflow execution and shows the input IMAGE in the node "
-                "body. Click Approve to continue (image passes through to the "
-                "output), or Reject to stop the workflow. Cancellation by "
-                "ComfyUI's global Cancel button is honored. Timeout: 10 minutes."
+                "Pauses workflow execution and shows the input IMAGE for review. "
+                "Approve passes the image through the APPROVED output. "
+                "Reject routes the image to the matching REJECTED_N output (based on "
+                "the selected reason) without stopping the workflow — branches wired "
+                "to unselected rejection outputs are simply skipped. "
+                "Cancellation by ComfyUI's global Cancel button is honored. Timeout: 10 minutes."
             ),
-            inputs=[io.Image.Input("images")],
-            outputs=[io.Image.Output("IMAGE")],
+            inputs=[
+                io.Image.Input("images"),
+                *[
+                    io.String.Input(
+                        f"rejection_reason_{i + 1}",
+                        default="Reason 1" if i == 0 else "",
+                    )
+                    for i in range(NUM_REJECTION_SLOTS)
+                ],
+            ],
+            outputs=[
+                io.Image.Output("APPROVED"),
+                *[io.Image.Output(f"REJECTED_{i + 1}") for i in range(NUM_REJECTION_SLOTS)],
+                io.String.Output("REJECTION_REASON"),
+            ],
             hidden=[io.Hidden.unique_id],
         )
 
     @classmethod
-    def execute(cls, images):
+    def execute(cls, images,
+                rejection_reason_1="Reason 1",
+                rejection_reason_2="",
+                rejection_reason_3="",
+                rejection_reason_4=""):
         unique_id = str(cls.hidden.unique_id)
+        labels = [rejection_reason_1, rejection_reason_2, rejection_reason_3, rejection_reason_4]
 
         # 1. Save preview images to temp dir so the UI can render them via /view.
         try:
@@ -69,28 +91,25 @@ class NewflowHumanInTheLoop(io.ComfyNode):
         try:
             PromptServer.instance.send_sync(
                 "newflow.hitl.awaiting",
-                {"node_id": unique_id, "images": saved},
+                {"node_id": unique_id, "images": saved, "labels": labels},
             )
         except Exception:
             log.exception("NewflowHumanInTheLoop: failed to send WS event")
 
         # 3. Set up the waiter and block until Approve / Reject / cancel / timeout.
         event = threading.Event()
-        result: dict = {"approved": None}
+        result: dict = {"approved": None, "reason_index": None}
         cls._waiters[unique_id] = (event, result)
 
         try:
             deadline = time.monotonic() + DECISION_TIMEOUT
             while True:
-                # Wait up to POLL_INTERVAL; loop checks for cancel & timeout.
                 if event.wait(POLL_INTERVAL):
                     break
                 if mm.processing_interrupted():
-                    # User clicked the global Cancel — let ComfyUI handle it
-                    # by raising the canonical interrupt exception.
                     raise mm.InterruptProcessingException()
                 if time.monotonic() > deadline:
-                    cls._notify_settled(unique_id, "timeout")
+                    cls._notify_settled(unique_id, "timeout", "")
                     raise RuntimeError(
                         "Newflow Human in the Loop: timed out after "
                         f"{DECISION_TIMEOUT} seconds waiting for user decision."
@@ -99,14 +118,22 @@ class NewflowHumanInTheLoop(io.ComfyNode):
             cls._waiters.pop(unique_id, None)
 
         # 4. Act on the decision.
-        if not result.get("approved"):
-            cls._notify_settled(unique_id, "rejected")
-            # Use ComfyUI's canonical interrupt exception so the workflow
-            # is shown as cancelled rather than errored.
-            raise mm.InterruptProcessingException()
+        if result.get("approved"):
+            cls._notify_settled(unique_id, "approved", "")
+            # APPROVED fires; all REJECTED_N outputs are None (their branches skip).
+            return io.NodeOutput(images, None, None, None, None, "", ui={"images": saved})
 
-        cls._notify_settled(unique_id, "approved")
-        return io.NodeOutput(images, ui={"images": saved})
+        # Rejected: route image to the selected rejection slot.
+        reason_index = result.get("reason_index") or 0
+        reason_index = max(0, min(reason_index, NUM_REJECTION_SLOTS - 1))
+        reason_text = labels[reason_index] if reason_index < len(labels) else ""
+
+        cls._notify_settled(unique_id, "rejected", reason_text)
+
+        rejected = [None] * NUM_REJECTION_SLOTS
+        rejected[reason_index] = images
+        # Output order: APPROVED, REJECTED_1..N, REJECTION_REASON
+        return io.NodeOutput(None, *rejected, reason_text, ui={"images": saved})
 
     # ----- helpers -----
 
@@ -115,7 +142,6 @@ class NewflowHumanInTheLoop(io.ComfyNode):
         temp_dir = folder_paths.get_temp_directory()
         os.makedirs(temp_dir, exist_ok=True)
 
-        # Tensor expected shape: (B, H, W, C) in 0..1.
         tensor = images
         if tensor is None:
             return []
@@ -145,18 +171,18 @@ class NewflowHumanInTheLoop(io.ComfyNode):
         return results
 
     @staticmethod
-    def _notify_settled(unique_id: str, outcome: str):
+    def _notify_settled(unique_id: str, outcome: str, reason: str):
         try:
             PromptServer.instance.send_sync(
                 "newflow.hitl.settled",
-                {"node_id": unique_id, "outcome": outcome},
+                {"node_id": unique_id, "outcome": outcome, "reason": reason},
             )
         except Exception:
             pass
 
 
 # ---------------------------------------------------------------------------
-# Server route — JS POSTs here when the user clicks Approve / Reject.
+# Server route — JS POSTs here when the user clicks Approve / a Reject reason.
 # ---------------------------------------------------------------------------
 
 @PromptServer.instance.routes.post("/newflow/hitl/decide")
@@ -168,6 +194,8 @@ async def newflow_hitl_decide(request: web.Request) -> web.Response:
 
     node_id = str(body.get("node_id", ""))
     approved = bool(body.get("approved"))
+    reason_index = int(body.get("reason_index", 0))
+
     if not node_id:
         return web.json_response({"error": "node_id required"}, status=400)
 
@@ -180,5 +208,11 @@ async def newflow_hitl_decide(request: web.Request) -> web.Response:
 
     event, result = waiter
     result["approved"] = approved
+    result["reason_index"] = reason_index
     event.set()
-    return web.json_response({"ok": True, "node_id": node_id, "approved": approved})
+    return web.json_response({
+        "ok": True,
+        "node_id": node_id,
+        "approved": approved,
+        "reason_index": reason_index,
+    })

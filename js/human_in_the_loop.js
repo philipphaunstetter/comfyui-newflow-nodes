@@ -3,6 +3,7 @@ import { api } from "../../scripts/api.js";
 
 const NODE_NAME = "NewflowHumanInTheLoop";
 const MIN_WIDTH = 320;
+const REASON_WIDGET_PREFIX = "rejection_reason_";
 
 const css = document.createElement("link");
 css.rel = "stylesheet";
@@ -32,20 +33,34 @@ function findHooksByNodeId(rawId) {
     return NODE_HOOKS.get(node) || null;
 }
 
-// WebSocket events from the server. ComfyUI's `api` exposes addEventListener
-// for arbitrary event types fired by PromptServer.send_sync(...).
+// Read rejection reason labels from the node's widgets.
+// Returns an array of { index, label } for non-empty reasons only.
+function getRejectionReasons(node) {
+    const reasons = [];
+    if (!node.widgets) return reasons;
+    for (const w of node.widgets) {
+        if (!w.name?.startsWith(REASON_WIDGET_PREFIX)) continue;
+        const slotStr = w.name.slice(REASON_WIDGET_PREFIX.length);
+        const slot = parseInt(slotStr, 10);
+        if (!Number.isFinite(slot)) continue;
+        const label = (w.value ?? "").trim();
+        if (label) reasons.push({ index: slot - 1, label });
+    }
+    return reasons;
+}
+
 api.addEventListener("newflow.hitl.awaiting", (event) => {
     const detail = event.detail || {};
     const hooks = findHooksByNodeId(detail.node_id);
     if (!hooks) return;
-    hooks.showAwaiting(detail.images || []);
+    hooks.showAwaiting(detail.images || [], detail.labels || []);
 });
 
 api.addEventListener("newflow.hitl.settled", (event) => {
     const detail = event.detail || {};
     const hooks = findHooksByNodeId(detail.node_id);
     if (!hooks) return;
-    hooks.showSettled(detail.outcome || "");
+    hooks.showSettled(detail.outcome || "", detail.reason || "");
 });
 
 app.registerExtension({
@@ -83,17 +98,10 @@ app.registerExtension({
             const buttons = document.createElement("div");
             buttons.className = "newflow-hitl-buttons";
 
-            const rejectBtn = document.createElement("button");
-            rejectBtn.type = "button";
-            rejectBtn.className = "newflow-hitl-btn newflow-hitl-reject";
-            rejectBtn.textContent = "✕ Reject";
-
             const approveBtn = document.createElement("button");
             approveBtn.type = "button";
             approveBtn.className = "newflow-hitl-btn newflow-hitl-approve";
             approveBtn.textContent = "✓ Approve";
-
-            buttons.append(rejectBtn, approveBtn);
 
             root.append(preview, status, buttons);
 
@@ -106,6 +114,12 @@ app.registerExtension({
             const setStatus = (text, state) => {
                 status.textContent = text;
                 status.dataset.state = state;
+            };
+
+            const setAllDisabled = (disabled) => {
+                for (const btn of buttons.querySelectorAll("button")) {
+                    btn.disabled = disabled;
+                }
             };
 
             const renderImages = (images) => {
@@ -126,11 +140,12 @@ app.registerExtension({
                 }
             };
 
-            const decide = async (approved) => {
-                rejectBtn.disabled = true;
-                approveBtn.disabled = true;
-                setStatus(approved ? "Approved — continuing…" : "Rejected — stopping…",
-                          approved ? "approved" : "rejected");
+            const decide = async (approved, reasonIndex, reasonLabel) => {
+                setAllDisabled(true);
+                const statusText = approved
+                    ? "Approved — continuing…"
+                    : `Rejected (${reasonLabel}) — routing…`;
+                setStatus(statusText, approved ? "approved" : "rejected");
                 try {
                     const resp = await fetch("/newflow/hitl/decide", {
                         method: "POST",
@@ -138,6 +153,7 @@ app.registerExtension({
                         body: JSON.stringify({
                             node_id: String(node.id),
                             approved,
+                            reason_index: reasonIndex,
                         }),
                     });
                     if (!resp.ok) {
@@ -148,33 +164,67 @@ app.registerExtension({
                     setStatus(`Decision failed: ${e.message || e}`, "error");
                 } finally {
                     setButtonsVisible(false);
-                    rejectBtn.disabled = false;
-                    approveBtn.disabled = false;
+                    setAllDisabled(false);
                 }
             };
-
-            rejectBtn.addEventListener("click", () => decide(false));
-            approveBtn.addEventListener("click", () => decide(true));
 
             // Initial UI state
             setButtonsVisible(false);
             setStatus("idle", "idle");
 
             const hooks = {
-                showAwaiting(images) {
+                showAwaiting(images, serverLabels) {
                     renderImages(images);
                     setStatus("Awaiting decision…", "awaiting");
-                    setButtonsVisible(true);
-                    rejectBtn.disabled = false;
+
+                    // Rebuild rejection buttons from current widget values.
+                    // Fall back to server-sent labels if widgets aren't populated yet.
+                    buttons.replaceChildren();
+
+                    const reasons = getRejectionReasons(node);
+                    if (reasons.length === 0 && serverLabels) {
+                        serverLabels.forEach((lbl, i) => {
+                            if (lbl.trim()) reasons.push({ index: i, label: lbl.trim() });
+                        });
+                    }
+
+                    if (reasons.length === 0) {
+                        // No reasons configured — single generic reject button.
+                        const rejectBtn = document.createElement("button");
+                        rejectBtn.type = "button";
+                        rejectBtn.className = "newflow-hitl-btn newflow-hitl-reject";
+                        rejectBtn.textContent = "✕ Reject";
+                        rejectBtn.addEventListener("click", () => decide(false, 0, "Rejected"));
+                        buttons.appendChild(rejectBtn);
+                    } else {
+                        for (const { index, label } of reasons) {
+                            const btn = document.createElement("button");
+                            btn.type = "button";
+                            btn.className = "newflow-hitl-btn newflow-hitl-reject newflow-hitl-reason-btn";
+                            btn.textContent = `✕ ${label}`;
+                            btn.addEventListener("click", () => decide(false, index, label));
+                            buttons.appendChild(btn);
+                        }
+                    }
+
+                    buttons.appendChild(approveBtn);
                     approveBtn.disabled = false;
+                    approveBtn.onclick = () => decide(true, 0, "");
+
+                    setButtonsVisible(true);
                     node.setDirtyCanvas(true, true);
                 },
-                showSettled(outcome) {
+                showSettled(outcome, reason) {
                     setButtonsVisible(false);
-                    if (outcome === "approved") setStatus("Approved", "approved");
-                    else if (outcome === "rejected") setStatus("Rejected", "rejected");
-                    else if (outcome === "timeout") setStatus("Timed out", "error");
-                    else setStatus(outcome || "settled", "idle");
+                    if (outcome === "approved") {
+                        setStatus("Approved", "approved");
+                    } else if (outcome === "rejected") {
+                        setStatus(reason ? `Rejected — ${reason}` : "Rejected", "rejected");
+                    } else if (outcome === "timeout") {
+                        setStatus("Timed out", "error");
+                    } else {
+                        setStatus(outcome || "settled", "idle");
+                    }
                     node.setDirtyCanvas(true, true);
                 },
             };

@@ -72,6 +72,7 @@
 
 .newflow-hitl-buttons {
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
 }
 
@@ -113,4 +114,10 @@
 .newflow-hitl-approve:hover:not(:disabled) {
     background: #22c55e;
     color: #fff;
+}
+
+/* Per-reason rejection buttons — slightly smaller to fit multiple on one row */
+.newflow-hitl-reason-btn {
+    flex: 0 1 auto;
+    font-size: 11px;
 }
