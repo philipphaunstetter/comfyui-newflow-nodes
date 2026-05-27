@@ -92,9 +92,12 @@ class NewflowSkillPrompt(io.ComfyNode):
         if not model:
             return io.NodeOutput("[error: no model selected — open ⚙ LLM Settings]")
 
+        skills_dict = kwargs.get("skills") or {}
+        if isinstance(skills_dict, str):
+            skills_dict = {}
         skills = []
         for i in range(NUM_SKILL_SLOTS):
-            s = kwargs.get(f"skill_{i + 1}")
+            s = skills_dict.get(f"skill_{i + 1}")
             if s and isinstance(s, str) and s.strip():
                 skills.append(s.strip())
 
