@@ -89,8 +89,6 @@ class NewflowSkillPrompt(io.ComfyNode):
             system_content = SKILL_PREAMBLE + "\n\n---\n\n".join(skills)
             messages.append({"role": "system", "content": system_content})
 
-        # Frame the user turn as an explicit execution command so the model
-        # doesn't default to a conversational response.
         user_content = user_prompt or ""
         if skills and user_content:
             user_content = (
@@ -99,15 +97,15 @@ class NewflowSkillPrompt(io.ComfyNode):
             )
         messages.append({"role": "user", "content": user_content})
 
-        # Assistant prefill: seed the reply with the first character of the
-        # expected output so the model must continue it rather than opening
-        # with conversational text. Only applied when skills are active.
-        prefill = ""
+        payload: dict = {"model": model, "messages": messages, "stream": False}
         if skills:
-            prefill = "{"
-            messages.append({"role": "assistant", "content": prefill})
-
-        payload = {"model": model, "messages": messages, "stream": False}
+            # format="json" makes Ollama enforce valid JSON at the engine level —
+            # far more reliable than prompt instructions alone.
+            payload["format"] = "json"
+            # Disable thinking mode (Qwen3, deepseek-r1, etc.): thinking
+            # produces a conversational `content` even when the system prompt
+            # demands raw JSON.
+            payload["think"] = False
 
         try:
             req = urllib.request.Request(
@@ -118,11 +116,7 @@ class NewflowSkillPrompt(io.ComfyNode):
             )
             with urllib.request.urlopen(req, timeout=300) as resp:
                 result = json.loads(resp.read())
-            content = result.get("message", {}).get("content", "")
-            # Re-attach the prefill character the model continued from.
-            if prefill:
-                content = prefill + content
-            return io.NodeOutput(content)
+            return io.NodeOutput(result.get("message", {}).get("content", ""))
         except urllib.error.HTTPError as e:
             body = e.read(500).decode("utf-8", errors="replace")
             return io.NodeOutput(f"[HTTP {e.code}: {body}]")
