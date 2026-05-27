@@ -76,6 +76,16 @@ class NewflowSkillPrompt(io.ComfyNode):
         model = (raw.get("model") or "").strip()
         ollama_url = (raw.get("ollama_url") or "").strip().rstrip("/") or DEFAULT_OLLAMA_URL
 
+        options: dict = {}
+        if raw.get("num_ctx"):
+            options["num_ctx"] = int(raw["num_ctx"])
+        if raw.get("temperature") is not None:
+            options["temperature"] = float(raw["temperature"])
+        if raw.get("max_tokens") and int(raw["max_tokens"]) > 0:
+            options["num_predict"] = int(raw["max_tokens"])
+        if raw.get("top_p") is not None:
+            options["top_p"] = float(raw["top_p"])
+
         if not model:
             return io.NodeOutput("[error: no model selected — open ⚙ LLM Settings]")
 
@@ -98,7 +108,7 @@ class NewflowSkillPrompt(io.ComfyNode):
             )
         messages.append({"role": "user", "content": user_content})
 
-        payload: dict = {"model": model, "messages": messages, "stream": False}
+        payload: dict = {"model": model, "messages": messages, "stream": False, "options": options}
         if skills:
             # format="json" makes Ollama enforce valid JSON at the engine level —
             # far more reliable than prompt instructions alone.
