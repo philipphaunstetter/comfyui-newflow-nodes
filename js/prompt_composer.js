@@ -62,8 +62,7 @@ const isInNewflowEditor = (target) =>
             // honor that here so bypassed/muted Composers don't auto-regen.
             const composers = (app.graph?._nodes || []).filter(
                 (n) =>
-                    (n.comfyClass === "NewflowPromptComposer"
-                        || n.comfyClass === "NewflowPromptComposerSimple")
+                    n.comfyClass === "NewflowPromptComposer"
                     && n._newflowIsAutoRegen?.()
                     && n.mode !== 2
                     && n.mode !== 4
@@ -161,9 +160,9 @@ const escHtml = (s) =>
 // JIT image cache populator — walks upstream IMAGE sources and collects
 // filenames so the Composer's Generate flow can populate IMAGE_CACHE BEFORE
 // calling Ollama. This way the user doesn't have to run the workflow first.
-// Supports LoadImage, NewflowImageArray, and NewflowImageBatch as sources. For
-// other node types we can't introspect, so we just skip them and the user
-// falls back to "run the workflow once".
+// Supports LoadImage and NewflowImageBatch (both Slots and Wardrobe modes) as
+// sources. For other node types we can't introspect, so we just skip them and
+// the user falls back to "run the workflow once".
 // ---------------------------------------------------------------------------
 
 const COMPOSER_IMAGE_SLOTS = ["IMAGES", "IMAGE_LIST"];
@@ -182,42 +181,36 @@ function _collectFromNode(node, refs, seen) {
         return;
     }
 
-    if (klass === "NewflowImageArray") {
-        const w = node.widgets?.find((w) => w.name === "containers");
-        if (!w?.value) return;
-        let containers;
-        try { containers = JSON.parse(w.value); } catch { return; }
-        if (!Array.isArray(containers)) return;
-
-        // Mirror the Python execute order: each connected IMAGE_N slot in
-        // order, then each included container's currently-selected image.
-        for (const slotName of ["IMAGE_1", "IMAGE_2", "IMAGE_3", "IMAGE_4"]) {
-            const slotIdx = (node.inputs || []).findIndex((i) => i.name === slotName);
-            if (slotIdx < 0) continue;
-            const upstream = node.getInputNode?.(slotIdx);
-            if (upstream) _collectFromNode(upstream, refs, seen);
-        }
-
-        for (const c of containers) {
-            if (!c || c.included === false) continue;
-            const images = Array.isArray(c.images) ? c.images : [];
-            if (images.length === 0) continue;
-            const idx = typeof c.currentIdx === "number" ? c.currentIdx : 0;
-            const safe = Math.max(0, Math.min(idx, images.length - 1));
-            const img = images[safe];
-            if (img?.filename) {
-                refs.push({
-                    filename: String(img.filename),
-                    subfolder: img.subfolder || "",
-                    type: img.type || "input",
-                });
-            }
-        }
-        return;
-    }
-
     if (klass === "NewflowImageBatch") {
-        // Recurse into every connected image_N slot, in order.
+        // Mode is a DynamicCombo widget — read it to know which sub-inputs
+        // are live. Default to Slots so old workflows without a mode value
+        // still resolve.
+        const modeW = node.widgets?.find((w) => w.name === "mode");
+        const mode = modeW?.value || "Slots";
+
+        if (mode === "Wardrobe") {
+            // External IMAGE_N sockets first (matches Python execute order).
+            for (const slotName of ["IMAGE_1", "IMAGE_2", "IMAGE_3", "IMAGE_4"]) {
+                const slotIdx = (node.inputs || []).findIndex((i) => i.name === slotName);
+                if (slotIdx < 0) continue;
+                const upstream = node.getInputNode?.(slotIdx);
+                if (upstream) _collectFromNode(upstream, refs, seen);
+            }
+            // Autogrow garment_N slots — each value is a filename in input/.
+            const garmentWidgets = (node.widgets || [])
+                .filter((w) => w.name?.startsWith("garment_") && typeof w.value === "string" && w.value);
+            garmentWidgets.sort((a, b) => {
+                const ai = parseInt(a.name.slice("garment_".length), 10) || 0;
+                const bi = parseInt(b.name.slice("garment_".length), 10) || 0;
+                return ai - bi;
+            });
+            for (const w of garmentWidgets) {
+                refs.push({ filename: String(w.value), subfolder: "", type: "input" });
+            }
+            return;
+        }
+
+        // Slots mode — recurse into every connected image_N slot, in order.
         const inputs = node.inputs || [];
         for (let i = 0; i < inputs.length; i++) {
             if (!inputs[i] || !inputs[i].name?.startsWith("image_")) continue;
@@ -295,17 +288,6 @@ export function readUpstreamStringForGenerate(node, inputName) {
         if (widgetName) {
             const v = readDomState(widgetName);
             if (v != null) return v;
-        }
-    }
-
-    if (src.comfyClass === "NewflowPromptComposerSimple" && outName) {
-        if (outName === "OUTPUT") {
-            const v = readDomState("llm_output_state");
-            if (v != null) return v;
-        }
-        if (outName === "USER" || outName === "SYSTEM") {
-            const w = src.widgets?.find((x) => x.name === outName);
-            if (typeof w?.value === "string") return w.value;
         }
     }
 
@@ -1711,12 +1693,47 @@ app.registerExtension({
                 }),
             });
 
-            // Each widget gets a fixed height. Fully independent of node.size
-            // to avoid feedback loops. Editors can be resized via their corner
-            // handles (CSS `resize: vertical`).
-            userWidget.computeSize = (w) => [w, FIXED_USER_WIDGET_H];
-            systemWidget.computeSize = (w) => [w, FIXED_SYSTEM_WIDGET_H];
+            // Mode visibility: in Plain mode the rich USER/SYSTEM editors are
+            // hidden — the schema-level USER and SYSTEM multiline widgets
+            // (rendered automatically by the DynamicCombo) take over. The LLM
+            // output editor stays in both modes.
+            const isTemplated = () =>
+                (node.widgets?.find((w) => w.name === "mode")?.value || "Templated")
+                    === "Templated";
+
+            const applyModeVisibility = () => {
+                const templated = isTemplated();
+                userHost.style.display = templated ? "" : "none";
+                systemHost.style.display = templated ? "" : "none";
+                chipStrip.style.display = templated ? "" : "none";
+                // Force a re-layout so the node height adjusts.
+                if (Array.isArray(node.size)) {
+                    node.setSize?.(node.computeSize?.() || node.size);
+                }
+                node.setDirtyCanvas?.(true, true);
+            };
+
+            // Each widget gets a fixed height in Templated mode; 0 height in
+            // Plain mode (hidden). Fully independent of node.size to avoid
+            // feedback loops.
+            userWidget.computeSize = (w) => [w, isTemplated() ? FIXED_USER_WIDGET_H : 0];
+            systemWidget.computeSize = (w) => [w, isTemplated() ? FIXED_SYSTEM_WIDGET_H : 0];
             llmWidget.computeSize = (w) => [w, FIXED_LLM_WIDGET_H];
+
+            // Watch the mode combo and re-apply on every switch. We chain
+            // onto whatever LiteGraph already wired (default Combo callback
+            // updates node state).
+            const modeWidget = node.widgets?.find((w) => w.name === "mode");
+            if (modeWidget) {
+                const origModeCb = modeWidget.callback;
+                modeWidget.callback = function () {
+                    const r = origModeCb?.apply(this, arguments);
+                    applyModeVisibility();
+                    return r;
+                };
+            }
+
+            applyModeVisibility();
 
             // Initial render — happens before setValue is called for fresh nodes
             refreshAll();
@@ -1725,10 +1742,14 @@ app.registerExtension({
             //   1. node.size — direct property
             //   2. node.computeSize — what LiteGraph asks for sizing
             //   3. node.onResize — clamp on user drag
+            const minHForMode = () =>
+                isTemplated() ? MIN_HEIGHT : FIXED_LLM_WIDGET_H + NODE_CHROME_H;
+
             const applyMinSize = () => {
                 if (!Array.isArray(node.size)) return;
                 if (node.size[0] < MIN_WIDTH) node.size[0] = MIN_WIDTH;
-                if (node.size[1] < MIN_HEIGHT) node.size[1] = MIN_HEIGHT;
+                const minH = minHForMode();
+                if (node.size[1] < minH) node.size[1] = minH;
                 node.setSize?.(node.size);
                 node.setDirtyCanvas?.(true, true);
             };
@@ -1737,7 +1758,13 @@ app.registerExtension({
             node.computeSize = function (out) {
                 const r = origComputeSize?.call(this, out) || [MIN_WIDTH, MIN_HEIGHT];
                 if (r[0] < MIN_WIDTH) r[0] = MIN_WIDTH;
-                if (r[1] < MIN_HEIGHT) r[1] = MIN_HEIGHT;
+                // In Plain mode the rich USER/SYSTEM editors collapse to 0 —
+                // only the LLM editor + chrome contribute to the floor. The
+                // schema USER/SYSTEM widgets size themselves.
+                const minH = isTemplated()
+                    ? MIN_HEIGHT
+                    : FIXED_LLM_WIDGET_H + NODE_CHROME_H;
+                if (r[1] < minH) r[1] = minH;
                 return r;
             };
 
@@ -1746,7 +1773,8 @@ app.registerExtension({
             node.onResize = function (size) {
                 if (Array.isArray(size)) {
                     if (size[0] < MIN_WIDTH) size[0] = MIN_WIDTH;
-                    if (size[1] < MIN_HEIGHT) size[1] = MIN_HEIGHT;
+                    const minH = minHForMode();
+                    if (size[1] < minH) size[1] = minH;
                 }
                 origOnResize?.apply(this, arguments);
             };

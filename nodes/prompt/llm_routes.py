@@ -84,6 +84,43 @@ def tensor_to_b64_pngs(images) -> list[str]:
     return _single_tensor_to_b64_pngs(images)
 
 
+def combine_and_cache_images(unique_id: str, *sources) -> None:
+    """Flatten any combination of image tensors / lists / list-of-lists into a
+    single list of native-resolution tensors, then cache them as base64 PNGs
+    under the Composer's node id.
+
+    Called by both Composer variants. Composer feeds it (IMAGES, IMAGE_LIST):
+    the first is the padded batch input, the second is the native-resolution
+    IMAGE_LIST input. ``is_input_list=True`` means each source may itself
+    arrive wrapped in a list, so we unwrap defensively.
+
+    Failures are swallowed (logged at debug level) — image caching is a
+    best-effort UX feature for Generate, never the critical path.
+    """
+    if not unique_id:
+        return
+    combined: list = []
+    for src in sources:
+        if src is None:
+            continue
+        if isinstance(src, list):
+            for item in src:
+                if item is None:
+                    continue
+                if isinstance(item, list):
+                    combined.extend(t for t in item if t is not None)
+                else:
+                    combined.append(item)
+        else:
+            combined.append(src)
+    if not combined:
+        return
+    try:
+        cache_images(unique_id, tensor_to_b64_pngs(combined))
+    except Exception:
+        log.debug("combine_and_cache_images failed", exc_info=True)
+
+
 def _resolve_url(url: str | None) -> str:
     if url and url.strip():
         return url.strip().rstrip("/")
