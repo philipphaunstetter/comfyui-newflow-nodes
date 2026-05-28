@@ -43,18 +43,19 @@ class NewflowExtension(ComfyExtension):
         # Old node had a single `containers` DOM widget holding the wardrobe
         # JSON. NodeReplace can't expand it into N positional garment_N
         # widgets on its own — js/image_batch.js does that in
-        # beforeConfigureGraph BEFORE NodeReplace runs. Here we only declare
-        # the simple input mappings (mode and the 4 external IMAGE sockets).
+        # beforeConfigureGraph BEFORE NodeReplace runs.
+        # IMAGE_1..IMAGE_4 are top-level sockets on the new node (above the
+        # DynamicCombo), so the mapping is a clean 1:1 — no dot-notation.
         await api.node_replacement.register(io.NodeReplace(
             new_node_id="NewflowImageBatch",
             old_node_id="NewflowImageArray",
             old_widget_ids=["containers"],
             input_mapping=[
                 {"new_id": "mode", "set_value": "Wardrobe"},
-                {"new_id": "mode.IMAGE_1", "old_id": "IMAGE_1"},
-                {"new_id": "mode.IMAGE_2", "old_id": "IMAGE_2"},
-                {"new_id": "mode.IMAGE_3", "old_id": "IMAGE_3"},
-                {"new_id": "mode.IMAGE_4", "old_id": "IMAGE_4"},
+                {"new_id": "IMAGE_1", "old_id": "IMAGE_1"},
+                {"new_id": "IMAGE_2", "old_id": "IMAGE_2"},
+                {"new_id": "IMAGE_3", "old_id": "IMAGE_3"},
+                {"new_id": "IMAGE_4", "old_id": "IMAGE_4"},
             ],
             output_mapping=[
                 {"new_idx": 0, "old_idx": 0},  # IMAGE

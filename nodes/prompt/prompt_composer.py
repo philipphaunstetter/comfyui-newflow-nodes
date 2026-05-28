@@ -49,6 +49,28 @@ class NewflowPromptComposer(io.ComfyNode):
                 "at full quality with no padding."
             ),
             inputs=[
+                # NOTE: io.DynamicCombo.Input cannot be the *first* schema
+                # input — the frontend's addInputs/dynamicComboWidget chain
+                # fails with "Failed to find input socket for mode" if it is.
+                # All working ComfyUI api_node examples (anthropic, openrouter,
+                # rodin, elevenlabs, bfl, …) put a regular input (String or
+                # Autogrow) before any DynamicCombo. We honour the same rule
+                # by listing the image inputs first.
+                io.Image.Input(
+                    "IMAGES",
+                    optional=True,
+                    tooltip="Optional reference image(s) — standard padded IMAGE batch.",
+                ),
+                io.Image.Input(
+                    "IMAGE_LIST",
+                    optional=True,
+                    tooltip=(
+                        "Optional IMAGE_LIST input — accepts the IMAGE_LIST "
+                        "output of Newflow Image Batch. Each image keeps its "
+                        "native dimensions (no padding) so vision LLMs see "
+                        "them at full quality."
+                    ),
+                ),
                 io.DynamicCombo.Input(
                     "mode",
                     options=[
@@ -93,21 +115,6 @@ class NewflowPromptComposer(io.ComfyNode):
                         "Templated: [[Key]] pills + slash-menu, OPTIONS JSON "
                         "drives substitution. Plain: direct USER and SYSTEM "
                         "text fields, no substitution."
-                    ),
-                ),
-                io.Image.Input(
-                    "IMAGES",
-                    optional=True,
-                    tooltip="Optional reference image(s) — standard padded IMAGE batch.",
-                ),
-                io.Image.Input(
-                    "IMAGE_LIST",
-                    optional=True,
-                    tooltip=(
-                        "Optional IMAGE_LIST input — accepts the IMAGE_LIST "
-                        "output of Newflow Image Batch. Each image keeps its "
-                        "native dimensions (no padding) so vision LLMs see "
-                        "them at full quality."
                     ),
                 ),
             ],

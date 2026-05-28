@@ -51,21 +51,38 @@ MODE_WARDROBE = "Wardrobe"
 class NewflowImageBatch(io.ComfyNode):
     @classmethod
     def define_schema(cls):
+        # External IMAGE sockets carried over from NewflowImageArray. Hoisted
+        # to the top level (above the DynamicCombo) for two reasons:
+        #  1. io.DynamicCombo.Input cannot be the *first* schema input —
+        #     the frontend's dynamicComboWidget wiring fails with "Failed to
+        #     find input socket for mode" when it is. Every working api_node
+        #     in the ComfyUI codebase puts a regular input first.
+        #  2. The old NewflowImageArray had these as top-level sockets, so
+        #     keeping them top-level makes the NodeReplace mapping a clean
+        #     1:1 (IMAGE_N -> IMAGE_N) instead of needing dot-notation.
+        # In Slots mode these are simply ignored — execute() only consumes
+        # them when mode == Wardrobe.
+        external_inputs = [
+            io.Image.Input(
+                f"IMAGE_{i + 1}",
+                optional=True,
+                tooltip=(
+                    "External image socket. Consumed in Wardrobe mode "
+                    "(prepended to the output in order); ignored in Slots mode."
+                ),
+            )
+            for i in range(NUM_WARDROBE_EXTERNAL)
+        ]
         slot_inputs = [
             io.Image.Input(f"image_{i + 1}", optional=True)
             for i in range(NUM_SLOTS)
         ]
-        wardrobe_external = [
-            io.Image.Input(
-                f"IMAGE_{i + 1}",
-                optional=True,
-                tooltip="Externally wired image; prepended to the wardrobe output in order.",
-            )
-            for i in range(NUM_WARDROBE_EXTERNAL)
-        ]
+        # io.Autogrow.TemplateNames (not TemplatePrefix) is the pattern proven
+        # to work when nested inside a DynamicCombo Option — see
+        # comfy_api_nodes/nodes_openrouter.py for the canonical example.
         garments_input = io.Autogrow.Input(
             "garments",
-            template=io.Autogrow.TemplatePrefix(
+            template=io.Autogrow.TemplateNames(
                 input=io.Combo.Input(
                     "file",
                     options=[],
@@ -73,9 +90,8 @@ class NewflowImageBatch(io.ComfyNode):
                     image_folder=io.FolderType.input,
                     tooltip="Drag-drop or pick a file. Stored in ComfyUI's input/ folder.",
                 ),
-                prefix="garment_",
+                names=[f"garment_{i}" for i in range(WARDROBE_MAX)],
                 min=WARDROBE_MIN,
-                max=WARDROBE_MAX,
             ),
             tooltip="Wardrobe slots — add/remove via the standard Autogrow controls.",
         )
@@ -89,25 +105,24 @@ class NewflowImageBatch(io.ComfyNode):
                 "resolution IMAGE_LIST. Smaller images are padded with white "
                 "to match the largest H × W; each image keeps its original "
                 "aspect ratio.\n\n"
-                "Slots mode: 8 optional IMAGE input sockets for chaining "
+                "Slots mode: 8 optional image_N input sockets for chaining "
                 "upstream image producers.\n\n"
-                "Wardrobe mode: 4 optional IMAGE sockets plus an Autogrow "
-                "list of upload-per-slot garments (drag-drop files in directly). "
-                "Replaces the former Newflow Clothing / Image Array node."
+                "Wardrobe mode: the IMAGE_N sockets are consumed (prepended "
+                "in order) and an Autogrow list of per-slot garments lets "
+                "you drag-drop files directly into each slot. Replaces the "
+                "former Newflow Clothing / Image Array node."
             ),
             inputs=[
+                *external_inputs,
                 io.DynamicCombo.Input(
                     "mode",
                     options=[
                         io.DynamicCombo.Option(MODE_SLOTS, slot_inputs),
-                        io.DynamicCombo.Option(
-                            MODE_WARDROBE,
-                            wardrobe_external + [garments_input],
-                        ),
+                        io.DynamicCombo.Option(MODE_WARDROBE, [garments_input]),
                     ],
                     tooltip=(
                         "Slots: 8 fixed IMAGE sockets. "
-                        "Wardrobe: 4 IMAGE sockets plus per-slot upload widgets."
+                        "Wardrobe: per-slot upload widgets (IMAGE_N sockets above are also used)."
                     ),
                 ),
             ],
@@ -119,13 +134,16 @@ class NewflowImageBatch(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, mode):
+    def execute(cls, mode, **kwargs):
+        # Top-level IMAGE_N sockets arrive as direct kwargs (they live above
+        # the DynamicCombo). The DynamicCombo dict carries Slot/Wardrobe-
+        # specific sub-inputs (image_1..image_8 or garments).
         if not isinstance(mode, dict):
             mode = {}
         selected = mode.get("mode", MODE_SLOTS)
 
         if selected == MODE_WARDROBE:
-            tensors = cls._collect_wardrobe(mode)
+            tensors = cls._collect_wardrobe(mode, kwargs)
         else:
             tensors = cls._collect_slots(mode)
 
@@ -158,15 +176,16 @@ class NewflowImageBatch(io.ComfyNode):
         return flat
 
     @classmethod
-    def _collect_wardrobe(cls, mode: dict) -> list[torch.Tensor]:
+    def _collect_wardrobe(cls, mode: dict, top_level: dict) -> list[torch.Tensor]:
         """Wardrobe mode — externally wired IMAGE_N (first frame only) followed
         by each Autogrow garment slot loaded from input/."""
         tensors: list[torch.Tensor] = []
 
         # External sockets first, in numeric order. Matches the old
         # NewflowImageArray semantics where IMAGE_N prepended to the output.
+        # IMAGE_N lives at the top level (above the DynamicCombo).
         for i in range(NUM_WARDROBE_EXTERNAL):
-            slot = mode.get(f"IMAGE_{i + 1}")
+            slot = top_level.get(f"IMAGE_{i + 1}")
             if slot is None:
                 continue
             t = slot
