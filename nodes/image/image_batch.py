@@ -38,11 +38,12 @@ NUM_SLOTS = 8
 # Preserved verbatim so existing Clothing workflows migrate cleanly.
 NUM_WARDROBE_EXTERNAL = 4
 
-# Per-slot caps for the Autogrow garments. min=1 means the user sees at
-# least one slot when a fresh node is dropped; max=16 is plenty for any
-# wardrobe and well within Autogrow's hard limit of 100.
-WARDROBE_MIN = 1
-WARDROBE_MAX = 16
+# Fixed garment-slot count. We can't use io.Autogrow here: Autogrow forces
+# `force_input=True` on every WidgetInput template (see
+# comfy_api/latest/_io.py:970-971), which strips the upload widget from
+# io.Combo.Input — turning our drag-drop slots into sockets-only. Fixed
+# slots keep the upload widget and the drag-drop UX intact.
+NUM_WARDROBE_SLOTS = 8
 
 MODE_SLOTS = "Slots"
 MODE_WARDROBE = "Wardrobe"
@@ -90,24 +91,25 @@ class NewflowImageBatch(io.ComfyNode):
             ),
             *[io.Image.Input(f"image_{i + 1}", optional=True) for i in range(NUM_SLOTS)],
         ]
-        # io.Autogrow.TemplateNames (not TemplatePrefix) is the pattern proven
-        # to work when nested inside a DynamicCombo Option — see
-        # comfy_api_nodes/nodes_openrouter.py for the canonical example.
-        garments_input = io.Autogrow.Input(
-            "garments",
-            template=io.Autogrow.TemplateNames(
-                input=io.Combo.Input(
-                    "file",
-                    options=[],
-                    upload=io.UploadType.image,
-                    image_folder=io.FolderType.input,
-                    tooltip="Drag-drop or pick a file. Stored in ComfyUI's input/ folder.",
+        # Fixed garment slots — N independent io.Combo.Input upload widgets.
+        # Mirrors LoadImage's pattern (options=[] + upload=image triggers
+        # ComfyUI's built-in drag-drop + file picker). Each slot is optional;
+        # empty slots are skipped at execute time. User-editable labels live
+        # in a separate wardrobe_labels DOM widget added by image_batch.js.
+        garment_inputs = [
+            io.Combo.Input(
+                f"garment_{i + 1}",
+                options=[],
+                optional=True,
+                upload=io.UploadType.image,
+                image_folder=io.FolderType.input,
+                tooltip=(
+                    "Drag-drop or pick an image. Stored in ComfyUI's input/ "
+                    "folder. Leave empty to skip."
                 ),
-                names=[f"garment_{i}" for i in range(WARDROBE_MAX)],
-                min=WARDROBE_MIN,
-            ),
-            tooltip="Wardrobe slots — add/remove via the standard Autogrow controls.",
-        )
+            )
+            for i in range(NUM_WARDROBE_SLOTS)
+        ]
 
         return io.Schema(
             node_id="NewflowImageBatch",
@@ -131,7 +133,7 @@ class NewflowImageBatch(io.ComfyNode):
                     "mode",
                     options=[
                         io.DynamicCombo.Option(MODE_SLOTS, slot_inputs),
-                        io.DynamicCombo.Option(MODE_WARDROBE, [garments_input]),
+                        io.DynamicCombo.Option(MODE_WARDROBE, garment_inputs),
                     ],
                     tooltip=(
                         "Slots: 8 fixed IMAGE sockets. "
@@ -197,7 +199,7 @@ class NewflowImageBatch(io.ComfyNode):
     @classmethod
     def _collect_wardrobe(cls, mode: dict, top_level: dict) -> list[torch.Tensor]:
         """Wardrobe mode — externally wired IMAGE_N (first frame only) followed
-        by each Autogrow garment slot loaded from input/."""
+        by each garment_N upload slot loaded from ComfyUI's input/ folder."""
         tensors: list[torch.Tensor] = []
 
         # External sockets first, in numeric order. Matches the old
@@ -213,33 +215,14 @@ class NewflowImageBatch(io.ComfyNode):
             if t.shape[0] >= 1:
                 tensors.append(t[0:1])
 
-        # Autogrow garments — each slot value is a filename string under input/.
-        garments = mode.get("garments")
-        if isinstance(garments, dict):
-            # Preserve slot order (garment_0, garment_1, …) regardless of the
-            # dict's internal iteration order in case ComfyUI ever changes it.
-            ordered_keys = sorted(
-                garments.keys(),
-                key=lambda k: cls._garment_index(k),
-            )
-            for key in ordered_keys:
-                filename = garments.get(key)
-                tensor = cls._load_input_image(filename)
-                if tensor is not None:
-                    tensors.append(tensor)
+        # Garment upload slots — each value is a filename string under input/.
+        for i in range(NUM_WARDROBE_SLOTS):
+            filename = mode.get(f"garment_{i + 1}")
+            tensor = cls._load_input_image(filename)
+            if tensor is not None:
+                tensors.append(tensor)
 
         return tensors
-
-    @staticmethod
-    def _garment_index(key: str) -> int:
-        # garment_0 -> 0, garment_12 -> 12; non-conforming keys sort last.
-        prefix = "garment_"
-        if key.startswith(prefix):
-            try:
-                return int(key[len(prefix):])
-            except ValueError:
-                return 10_000
-        return 10_000
 
     @staticmethod
     def _load_input_image(filename) -> torch.Tensor | None:

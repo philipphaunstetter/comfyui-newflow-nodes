@@ -1,21 +1,23 @@
 // Frontend for the merged NewflowImageBatch node.
 //
 // Slots mode needs no custom JS — eight fixed image_N sockets render with
-// ComfyUI's default chrome. Wardrobe mode uses io.Autogrow with built-in
-// `upload=image` combo widgets per slot (drag-drop + file picker handled by
-// ComfyUI itself), plus a small "wardrobe_labels" sidecar widget we add here
-// so users can name each garment ("Top", "Trousers", …).
+// ComfyUI's default chrome. Wardrobe mode has eight fixed garment_N Combo
+// inputs with `upload=image` (drag-drop + file picker, the LoadImage
+// pattern). We add a small "wardrobe_labels" sidecar so users can name
+// each slot ("Top", "Trousers", …).
 //
 // Also handles the legacy migration: old NewflowImageArray nodes in saved
 // workflows are rewritten in `beforeConfigureGraph` so they load as the new
-// NewflowImageBatch with mode=Wardrobe, with each `containers` entry expanded
-// into a positional garment_N value and a wardrobe_labels JSON payload.
+// NewflowImageBatch with mode=Wardrobe, with each container's currently-
+// selected image landing in garment_N and its label landing in
+// wardrobe_labels.
 
 import { app } from "../../scripts/app.js";
 
 const NODE_NAME = "NewflowImageBatch";
 const LEGACY_NODE_NAME = "NewflowImageArray";
 const LABELS_WIDGET = "wardrobe_labels";
+const NUM_GARMENT_SLOTS = 8;            // must match NUM_WARDROBE_SLOTS in Python
 const DEFAULT_LABELS = ["Top", "Trousers", "Shoes"];
 
 const css = document.createElement("link");
@@ -23,8 +25,8 @@ css.rel = "stylesheet";
 css.href = new URL("./image_array.css", import.meta.url).href;
 document.head.appendChild(css);
 
-// Capture-phase shield so typing in the label inputs doesn't trigger
-// ComfyUI's global shortcuts.
+// Capture-phase shield so typing in label inputs doesn't trigger ComfyUI's
+// global shortcuts.
 const isInLabelInput = (target) =>
     target instanceof Element && target.closest(".newflow-wardrobe-label-input") != null;
 ["keydown", "keyup", "keypress", "copy", "cut", "paste"].forEach((evt) => {
@@ -37,12 +39,12 @@ const isInLabelInput = (target) =>
     );
 });
 
-function pickLabel(index, existingLabels) {
-    if (index < DEFAULT_LABELS.length && !existingLabels.has(DEFAULT_LABELS[index])) {
+function pickDefaultLabel(index, used) {
+    if (index < DEFAULT_LABELS.length && !used.has(DEFAULT_LABELS[index])) {
         return DEFAULT_LABELS[index];
     }
     let n = 1;
-    while (existingLabels.has(`Accessory #${n}`)) n++;
+    while (used.has(`Accessory #${n}`)) n++;
     return `Accessory #${n}`;
 }
 
@@ -57,36 +59,17 @@ function parseLabels(raw) {
     }
 }
 
-function findGarmentWidgets(node) {
-    return (node.widgets || [])
-        .filter((w) => typeof w?.name === "string" && /^garment_\d+$/.test(w.name))
-        .sort((a, b) => {
-            const ai = parseInt(a.name.slice("garment_".length), 10) || 0;
-            const bi = parseInt(b.name.slice("garment_".length), 10) || 0;
-            return ai - bi;
-        });
-}
-
 function renderLabelsPanel(host, node, getLabels, setLabels) {
-    const garments = findGarmentWidgets(node);
     host.replaceChildren();
-
-    if (garments.length === 0) {
-        const empty = document.createElement("div");
-        empty.className = "newflow-wardrobe-empty";
-        empty.textContent = "(no garment slots yet — use the + button below)";
-        host.appendChild(empty);
-        return;
-    }
-
     const labels = getLabels();
     const used = new Set(Object.values(labels).filter((v) => typeof v === "string" && v));
     let touched = false;
 
-    garments.forEach((w, i) => {
-        if (!labels[w.name]) {
-            const next = pickLabel(i, used);
-            labels[w.name] = next;
+    for (let i = 0; i < NUM_GARMENT_SLOTS; i++) {
+        const slotName = `garment_${i + 1}`;
+        if (!labels[slotName]) {
+            const next = pickDefaultLabel(i, used);
+            labels[slotName] = next;
             used.add(next);
             touched = true;
         }
@@ -94,45 +77,38 @@ function renderLabelsPanel(host, node, getLabels, setLabels) {
         const row = document.createElement("div");
         row.className = "newflow-wardrobe-row";
 
-        const slotTag = document.createElement("span");
-        slotTag.className = "newflow-wardrobe-slot";
-        slotTag.textContent = w.name;
-        slotTag.title = "Autogrow slot id (used by Python)";
+        const tag = document.createElement("span");
+        tag.className = "newflow-wardrobe-slot";
+        tag.textContent = slotName;
+        tag.title = "Slot id (used by Python; matches the upload widget below)";
 
         const input = document.createElement("input");
         input.type = "text";
         input.className = "newflow-wardrobe-label-input";
-        input.value = labels[w.name] || "";
+        input.value = labels[slotName] || "";
         input.placeholder = "Label";
         input.maxLength = 64;
         input.addEventListener("input", () => {
-            const next = { ...getLabels(), [w.name]: input.value };
-            setLabels(next);
+            setLabels({ ...getLabels(), [slotName]: input.value });
         });
 
-        row.append(slotTag, input);
+        row.append(tag, input);
         host.appendChild(row);
-    });
-
-    if (touched) {
-        setLabels({ ...labels });
     }
+
+    if (touched) setLabels({ ...labels });
 }
 
 // ---------------------------------------------------------------------------
 // Legacy NewflowImageArray → NewflowImageBatch migration.
 //
-// NodeReplace (server-side, registered in __init__.py) can rename the class
-// and remap simple inputs, but it can't expand one DOM widget (`containers`)
-// into N positional widgets (`garment_0`, `garment_1`, …). We do that here
-// so the saved-workflow load path Just Works.
-//
-// We also rewrite class_type to the new id so the workflow shows up correctly
-// in the editor without the user having to queue it first.
+// NodeReplace (server-side, registered in __init__.py) renames the class and
+// remaps the IMAGE_N sockets, but it can't expand the old `containers` JSON
+// widget into N positional garment_N widgets. We do that here, before
+// ComfyUI builds the node from the saved JSON.
 // ---------------------------------------------------------------------------
 
 function legacyMigrateContainers(rawContainers) {
-    // rawContainers is the JSON string the old `containers` widget held.
     let arr;
     try {
         arr = typeof rawContainers === "string" ? JSON.parse(rawContainers) : rawContainers;
@@ -141,19 +117,19 @@ function legacyMigrateContainers(rawContainers) {
     }
     if (!Array.isArray(arr)) return { garments: [], labels: {} };
 
-    const garments = [];
+    const garments = []; // filename per slot, up to NUM_GARMENT_SLOTS
     const labels = {};
     for (const c of arr) {
         if (!c || typeof c !== "object") continue;
         if (c.included === false) continue;
+        if (garments.length >= NUM_GARMENT_SLOTS) break;
         const imagesMeta = Array.isArray(c.images) ? c.images : [];
         const idx = typeof c.currentIdx === "number"
             ? Math.max(0, Math.min(c.currentIdx, imagesMeta.length - 1))
             : 0;
         const sel = imagesMeta[idx];
-        const filename = sel?.filename || c.filename;
-        if (!filename) continue;
-        const slotName = `garment_${garments.length}`;
+        const filename = sel?.filename || c.filename || "";
+        const slotName = `garment_${garments.length + 1}`;
         garments.push(filename);
         if (typeof c.label === "string" && c.label) {
             labels[slotName] = c.label;
@@ -165,15 +141,17 @@ function legacyMigrateContainers(rawContainers) {
 function migrateLegacyNodeData(nodeData) {
     if (!nodeData || nodeData.type !== LEGACY_NODE_NAME) return;
 
-    // widgets_values in the saved JSON is positional — for the legacy node
-    // the only widget was `containers` (a single JSON string). Pull it out.
+    // widgets_values in the saved JSON is positional. For the legacy node the
+    // only widget was `containers` (a single JSON string).
     const rawContainers = Array.isArray(nodeData.widgets_values)
         ? nodeData.widgets_values[0]
         : null;
     const { garments, labels } = legacyMigrateContainers(rawContainers);
 
-    // Rewrite to the new node. mode comes first (DynamicCombo widget),
-    // followed by each garment_N upload combo, followed by wardrobe_labels.
+    // Pad to exactly NUM_GARMENT_SLOTS so the positional widgets_values lines
+    // up with the new schema's widget order: [mode, garment_1..N, labels].
+    while (garments.length < NUM_GARMENT_SLOTS) garments.push("");
+
     nodeData.type = NODE_NAME;
     nodeData.comfyClass = NODE_NAME;
     nodeData.widgets_values = [
@@ -241,9 +219,9 @@ app.registerExtension({
                 node.setDirtyCanvas?.(true, true);
             };
 
-            // The labels host has no intrinsic height in Slots mode; keep it 0
-            // so the node doesn't reserve dead vertical space.
-            labelWidget.computeSize = (w) => [w, isWardrobe() ? host.offsetHeight || 80 : 0];
+            // 0 height when Slots is selected so we don't reserve dead space.
+            labelWidget.computeSize = (w) =>
+                [w, isWardrobe() ? Math.max(host.offsetHeight, 24 * NUM_GARMENT_SLOTS + 16) : 0];
 
             const modeWidget = node.widgets?.find((w) => w.name === "mode");
             if (modeWidget) {
@@ -254,18 +232,6 @@ app.registerExtension({
                     return r;
                 };
             }
-
-            // Re-render the label panel whenever Autogrow adds/removes slots.
-            // Cheap to poll once a second; far simpler than hooking every
-            // Autogrow lifecycle event individually.
-            const poll = setInterval(() => {
-                if (isWardrobe()) refresh();
-            }, 1000);
-            const origRemoved = node.onRemoved;
-            node.onRemoved = function () {
-                clearInterval(poll);
-                origRemoved?.apply(this, arguments);
-            };
 
             applyVisibility();
         };
