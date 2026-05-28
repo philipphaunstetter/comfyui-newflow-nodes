@@ -77,16 +77,24 @@ class NewflowPromptComposer(io.ComfyNode):
                         io.DynamicCombo.Option(
                             MODE_TEMPLATED,
                             [
+                                # NOTE: no force_input here. A DynamicCombo.Option
+                                # whose sub-inputs are *all* sockets crashes the
+                                # frontend's dynamicComboWidget with "Failed to
+                                # find input socket for mode" — the expansion
+                                # path requires each Option to add at least one
+                                # widget. By dropping force_input we get both a
+                                # widget (a small text box, default "{}") AND a
+                                # socket users can wire upstream into.
                                 io.String.Input(
                                     "OPTIONS",
                                     default="{}",
                                     optional=True,
-                                    force_input=True,
                                     tooltip=(
                                         "JSON of {label: value} from Newflow "
                                         "Dynamic Dropdowns or any STRING source. "
                                         "Drives [[Key]] substitution in the "
-                                        "user and system prompts."
+                                        "user and system prompts. Wire upstream "
+                                        "or paste JSON directly."
                                     ),
                                 ),
                             ],

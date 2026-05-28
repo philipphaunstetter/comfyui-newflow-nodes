@@ -73,9 +73,22 @@ class NewflowImageBatch(io.ComfyNode):
             )
             for i in range(NUM_WARDROBE_EXTERNAL)
         ]
+        # NOTE: a DynamicCombo.Option whose sub-inputs are all sockets crashes
+        # the frontend's dynamicComboWidget. Each Option needs at least one
+        # widget. `flatten_batches` is the meaningful one here — controls
+        # whether multi-frame inputs get flattened into individual frames
+        # (default True, preserving the original NewflowImageBatch behaviour).
         slot_inputs = [
-            io.Image.Input(f"image_{i + 1}", optional=True)
-            for i in range(NUM_SLOTS)
+            io.Boolean.Input(
+                "flatten_batches",
+                default=True,
+                tooltip=(
+                    "If true, multi-frame inputs are split into individual "
+                    "frames before batching. If false, each input contributes "
+                    "its full batch as one entry (uncommon — leave on)."
+                ),
+            ),
+            *[io.Image.Input(f"image_{i + 1}", optional=True) for i in range(NUM_SLOTS)],
         ]
         # io.Autogrow.TemplateNames (not TemplatePrefix) is the pattern proven
         # to work when nested inside a DynamicCombo Option — see
@@ -160,9 +173,12 @@ class NewflowImageBatch(io.ComfyNode):
 
     @staticmethod
     def _collect_slots(mode: dict) -> list[torch.Tensor]:
-        """Slots mode — gather image_1..image_N in slot order, flatten any
-        batched inputs into individual frames (matches the old NewflowImageBatch
-        behaviour where a batch input contributed each frame separately)."""
+        """Slots mode — gather image_1..image_N in slot order. When
+        ``flatten_batches`` is true (the default, matching the old
+        NewflowImageBatch behaviour) multi-frame inputs are split into
+        individual frames before batching; when false each input contributes
+        its whole batch as a single entry."""
+        flatten = mode.get("flatten_batches", True)
         flat: list[torch.Tensor] = []
         for i in range(NUM_SLOTS):
             tensor = mode.get(f"image_{i + 1}")
@@ -171,8 +187,11 @@ class NewflowImageBatch(io.ComfyNode):
             t = tensor
             if t.dim() == 3:
                 t = t.unsqueeze(0)
-            for j in range(t.shape[0]):
-                flat.append(t[j : j + 1])
+            if flatten:
+                for j in range(t.shape[0]):
+                    flat.append(t[j : j + 1])
+            else:
+                flat.append(t)
         return flat
 
     @classmethod
