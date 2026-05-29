@@ -183,9 +183,8 @@ function _collectFromNode(node, refs, seen) {
     }
 
     if (klass === "NewflowImageBatch") {
-        // Mode is a DynamicCombo widget — read it to know which sub-inputs
-        // are live. Default to Slots so old workflows without a mode value
-        // still resolve.
+        // `mode` is a plain Combo widget. Default to Slots so old workflows
+        // without a mode value still resolve.
         const modeW = node.widgets?.find((w) => w.name === "mode");
         const mode = modeW?.value || "Slots";
 
@@ -197,16 +196,34 @@ function _collectFromNode(node, refs, seen) {
                 const upstream = node.getInputNode?.(slotIdx);
                 if (upstream) _collectFromNode(upstream, refs, seen);
             }
-            // Autogrow garment_N slots — each value is a filename in input/.
-            const garmentWidgets = (node.widgets || [])
-                .filter((w) => w.name?.startsWith("garment_") && typeof w.value === "string" && w.value);
-            garmentWidgets.sort((a, b) => {
-                const ai = parseInt(a.name.slice("garment_".length), 10) || 0;
-                const bi = parseInt(b.name.slice("garment_".length), 10) || 0;
-                return ai - bi;
-            });
-            for (const w of garmentWidgets) {
-                refs.push({ filename: String(w.value), subfolder: "", type: "input" });
+            // Container grid: each included container contributes its
+            // currently-selected uploaded image (mirrors the Python
+            // _iter_container_images order).
+            const cw = node.widgets?.find((w) => w.name === "containers");
+            let containers = [];
+            try {
+                containers = typeof cw?.value === "string" ? JSON.parse(cw.value) : cw?.value;
+            } catch {
+                containers = [];
+            }
+            if (Array.isArray(containers)) {
+                for (const c of containers) {
+                    if (!c || typeof c !== "object" || c.included === false) continue;
+                    const images = Array.isArray(c.images)
+                        ? c.images
+                        : (c.filename ? [{ filename: c.filename, subfolder: c.subfolder, type: c.type }] : []);
+                    if (!images.length) continue;
+                    let idx = Number.isInteger(c.currentIdx) ? c.currentIdx : 0;
+                    if (idx < 0 || idx >= images.length) idx = 0;
+                    const meta = images[idx];
+                    if (meta?.filename) {
+                        refs.push({
+                            filename: String(meta.filename),
+                            subfolder: meta.subfolder || "",
+                            type: meta.type || "input",
+                        });
+                    }
+                }
             }
             return;
         }
@@ -1554,6 +1571,62 @@ function migrateLegacySimpleNode(nodeData) {
     ];
 }
 
+// ---------------------------------------------------------------------------
+// Pre-merge NewflowPromptComposer realignment.
+//
+// The old (pre-mode) NewflowPromptComposer had NO `mode` combo, so its
+// widgets_values began with the USER editor state. The merged node inserts
+// `mode` as widget[0], which means an old node's saved values are shifted by
+// one slot: the USER prompt JSON lands in the `mode` combo and every editor
+// reads one slot too early (USER editor shows empty, etc).
+//
+// We can't rely on a positional shift alone because some of these nodes were
+// already opened once in the new build and re-saved in a half-migrated shape
+// (a duplicate empty USER state appears at widget[1]). So instead of shifting
+// blindly, we re-derive each editor's state by its JSON shape:
+//   - the blob carrying a `settings` object  -> LLM output state
+//   - the displayMode blob with the most text -> USER state
+//   - a remaining bare {text} blob            -> SYSTEM state
+// then rebuild the canonical [mode, user, system, llm] widget order. Nodes that
+// are already canonical (widget[0] is a "Templated"/"Plain" string) are left
+// untouched.
+// ---------------------------------------------------------------------------
+function realignLegacyComposerNode(nodeData) {
+    if (!nodeData || nodeData.type !== NODE_NAME) return;
+    const wv = Array.isArray(nodeData.widgets_values) ? nodeData.widgets_values : [];
+    if (wv.length === 0) return;
+    // Already canonical: the first widget holds the mode combo value.
+    if (wv[0] === "Templated" || wv[0] === "Plain") return;
+
+    const parseState = (v) => {
+        if (typeof v !== "string") return null;
+        const s = v.trim();
+        if (!s.startsWith("{")) return null;
+        try {
+            const o = JSON.parse(s);
+            return o && typeof o === "object" && "text" in o ? o : null;
+        } catch {
+            return null;
+        }
+    };
+
+    const states = wv.map((v) => ({ v, o: parseState(v) })).filter((x) => x.o);
+    const llm = states.find((x) => x.o.settings !== undefined) || null;
+    const userCands = states
+        .filter((x) => x !== llm && "displayMode" in x.o)
+        .sort((a, b) => String(b.o.text || "").length - String(a.o.text || "").length);
+    const user = userCands[0] || null;
+    const system =
+        states.find((x) => x !== llm && x !== user && !("displayMode" in x.o)) || null;
+
+    nodeData.widgets_values = [
+        "Templated",
+        user ? user.v : JSON.stringify({ text: "", displayMode: "source" }),
+        system ? system.v : JSON.stringify({ text: "" }),
+        llm ? llm.v : JSON.stringify({ text: "", settings: { ...DEFAULT_LLM_SETTINGS } }),
+    ];
+}
+
 app.registerExtension({
     name: "newflow.prompt_composer",
 
@@ -1561,6 +1634,7 @@ app.registerExtension({
         if (!graphData || !Array.isArray(graphData.nodes)) return;
         for (const node of graphData.nodes) {
             migrateLegacySimpleNode(node);
+            realignLegacyComposerNode(node);
         }
     },
 

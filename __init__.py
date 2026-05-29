@@ -15,8 +15,7 @@ class NewflowExtension(ComfyExtension):
     async def on_load(self) -> None:
         # Auto-migrate the two retired node ids into the merged nodes.
         # Old saved workflows that reference NewflowPromptComposerSimple or
-        # NewflowImageArray load transparently with the new node, with mode
-        # pre-set to the matching branch.
+        # NewflowImageArray load transparently with the replacement node.
         api = ComfyAPI()
 
         # Prompt Composer (Simple) → Prompt Composer (Plain mode).
@@ -40,19 +39,19 @@ class NewflowExtension(ComfyExtension):
             ],
         ))
 
-        # Image Array (Clothing) → Image Batch (Wardrobe mode).
-        # Old node had a single `containers` DOM widget holding the wardrobe
-        # JSON. NodeReplace can't expand it into N positional garment_N
-        # widgets on its own — js/image_batch.js does that in
-        # beforeConfigureGraph BEFORE NodeReplace runs.
-        # IMAGE_1..IMAGE_4 are top-level sockets on the new node (above the
-        # DynamicCombo), so the mapping is a clean 1:1 — no dot-notation.
+        # Image Array (Clothing) → Image Batch.
+        # The new node is a single Wardrobe-style node (no mode switcher): a
+        # container grid plus IMAGE_N external sockets. It reuses the exact same
+        # `containers` DOM widget shape, so migration is a plain rename. The DOM
+        # widget value isn't a schema input, so NodeReplace can't carry it — the
+        # JS beforeConfigureGraph shim in js/image_batch.js handles the rename and
+        # reshapes widgets_values so `containers` survives. This server-side
+        # NodeReplace is the safety net for the IMAGE_N sockets (1:1).
         await api.node_replacement.register(io.NodeReplace(
             new_node_id="NewflowImageBatch",
             old_node_id="NewflowImageArray",
             old_widget_ids=["containers"],
             input_mapping=[
-                {"new_id": "mode", "set_value": "Wardrobe"},
                 {"new_id": "IMAGE_1", "old_id": "IMAGE_1"},
                 {"new_id": "IMAGE_2", "old_id": "IMAGE_2"},
                 {"new_id": "IMAGE_3", "old_id": "IMAGE_3"},

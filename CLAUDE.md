@@ -45,16 +45,74 @@ One package, many nodes. Group node files by feature/theme under `nodes/`, not o
 
 ## Node-specific notes
 
-### Prompt Composer variants
+### Prompt Composer
 
-Two nodes share LLM streaming logic, settings, image-cache helpers, and the queue-interceptor auto-regen path:
+`NewflowPromptComposer` is a single mode-aware node (the former
+`NewflowPromptComposerSimple` was merged into it). A plain `mode` Combo widget
+switches behaviour; the USER/SYSTEM rich editors and the LLM Output editor are
+**identical and shared across both modes** — there is only one set of editors,
+so prompt content survives mode switches with no value/format mismatch.
 
-- `NewflowPromptComposer` — rich variant with `[[Key]]` variable templating, chip strip, slash-menu, display modes.
-- `NewflowPromptComposerSimple` — plain-text variant, no variables.
+- `Templated` (default) — `[[Key]]` substitution from the `OPTIONS` socket
+  (wired from Newflow Dynamic Dropdowns), chip strip + slash-menu visible.
+- `Plain` — the `OPTIONS` input socket is removed (via `removeInput`/`addInput`
+  in [js/prompt_composer.js](js/prompt_composer.js)), the chip strip is hidden,
+  and prompts are emitted verbatim (no substitution).
 
-Shared frontend helpers (`DEFAULT_LLM_SETTINGS`, `deserializeLlmState`, `hasDownstreamConsumer`, `openLlmSettings`, `preloadImageCache`) are exported from [js/prompt_composer.js](js/prompt_composer.js) and imported by [js/prompt_composer_simple.js](js/prompt_composer_simple.js). The queue interceptor in `prompt_composer.js` matches both `comfyClass` values.
+Mode only gates: the `OPTIONS` socket, the chip strip, and whether
+`runGenerate` substitutes `[[Key]]` tokens (`ctx.isTemplated()`). Old
+`NewflowPromptComposerSimple` workflows auto-migrate via `io.NodeReplace`
+(registered in [__init__.py](__init__.py), sets `mode=Plain`) plus a JS
+`beforeConfigureGraph` shim (`migrateLegacySimpleNode`) that reshapes the old
+plain-text USER/SYSTEM widget values into the new
+`user_prompt_state`/`system_prompt_state` JSON DOM-widget states.
 
-**When changing either node, check whether the other needs the same change**, especially for: LLM streaming, settings dialog, Generate/Auto/badge/status UI, image-cache logic, queue interceptor, persistence shape. The two `runGenerate`/badge implementations are partially duplicated; if drift becomes painful, extract a shared `js/llm_block.js` module.
+Pre-merge `NewflowPromptComposer` nodes (same `node_id`, but saved before the
+`mode` combo existed) are realigned by a second `beforeConfigureGraph` shim,
+`realignLegacyComposerNode`. The merged node inserts `mode` as widget[0], so an
+old node's saved `widgets_values` are shifted one slot — the USER prompt JSON
+lands in the `mode` combo and the editors read empty. The shim can't shift
+blindly (some nodes were re-saved half-migrated, leaving a duplicate empty USER
+state), so it re-derives each editor's state by JSON shape — `settings` blob →
+LLM, longest `displayMode` blob → USER, remaining bare `{text}` → SYSTEM — and
+rebuilds the canonical `[mode, user, system, llm]` order with `mode=Templated`.
+Nodes whose widget[0] is already `"Templated"`/`"Plain"` are left untouched.
+
+Shared frontend helpers (`DEFAULT_LLM_SETTINGS`, `deserializeLlmState`,
+`hasDownstreamConsumer`, `openLlmSettings`, `preloadImageCache`) are exported
+from [js/prompt_composer.js](js/prompt_composer.js) and reused by
+[js/skill_prompt.js](js/skill_prompt.js). The queue interceptor matches only
+`NewflowPromptComposer`.
+
+### Image Batch
+
+`NewflowImageBatch` is a single node with **no mode switcher** (an earlier
+two-mode Slots/Wardrobe design was dropped). It combines two image sources into
+one batch:
+
+- up to four `IMAGE_N` external sockets (autogrow: `IMAGE_1` shows first,
+  `IMAGE_2` appears once `IMAGE_1` is wired, … capped at 4) for upstream image
+  producers, prepended to the output in order;
+- an arbitrary number of labeled **containers** with directly-uploaded images
+  (drag-drop / file picker, per-card browsing, include toggle, remove,
+  drag-reorder, **+ Add container**). All container state lives in a single
+  `containers` JSON DOM widget read in Python from the prompt — it is **not** a
+  schema input.
+
+Outputs: `IMAGE` (white-padded batch, sampler/preview compatible) and
+`IMAGE_LIST` (native resolutions, for vision LLMs). The pad/stack logic lives in
+`pad_and_batch` ([nodes/image/_shared.py](nodes/image/_shared.py)).
+
+Old `NewflowImageArray` (Clothing) workflows auto-migrate via `io.NodeReplace`
+(registered in [__init__.py](__init__.py): plain rename + 1:1 `IMAGE_N`
+sockets) plus a JS `beforeConfigureGraph` shim (`reshapeImageBatchWidgets` in
+[js/image_batch.js](js/image_batch.js)). The shim collapses the old positional
+`widgets_values` (which across builds held a `flatten_batches` boolean, a
+`mode` string, per-slot `garment_N` filename strings, and a `garment_N→label`
+map) down to the single `[containers]` slot the current node expects. It
+classifies values by JSON shape (order-independent), reconstructing one
+container per non-empty garment filename paired with its label, and is
+idempotent on already-collapsed `[containers]` data.
 
 ## Local development
 
