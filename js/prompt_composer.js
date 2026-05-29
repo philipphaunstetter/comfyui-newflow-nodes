@@ -1704,26 +1704,34 @@ app.registerExtension({
                 (node.widgets?.find((w) => w.name === "mode")?.value || "Templated")
                     === "Templated";
 
-            // Schema widgets (rendered by ComfyUI) for USER/SYSTEM.
+            // Schema widgets (rendered by ComfyUI) for USER/SYSTEM. These are
+            // multiline String widgets — i.e. DOM widgets backed by a real
+            // <textarea> element. Hiding them needs three things together:
+            //   1. element.style.display = "none"  — kill the textarea
+            //   2. computeSize → [0, -4]            — collapse the row height
+            //   3. type = "hidden"                  — tell LiteGraph to skip
+            // Just setting type alone leaves the textarea visible.
             const schemaUserWidget = node.widgets?.find((w) => w.name === "USER");
             const schemaSystemWidget = node.widgets?.find((w) => w.name === "SYSTEM");
 
-            // Track original computeSize / type so we can restore in Templated mode.
-            const stashWidgetSize = (w) => {
+            const stashWidget = (w) => {
                 if (!w || w._newflowOrigComputeSize) return;
                 w._newflowOrigComputeSize = w.computeSize;
                 w._newflowOrigType = w.type;
+                w._newflowOrigDisplay = w.element?.style.display;
             };
-            stashWidgetSize(schemaUserWidget);
-            stashWidgetSize(schemaSystemWidget);
+            stashWidget(schemaUserWidget);
+            stashWidget(schemaSystemWidget);
 
             const hideSchemaWidget = (w) => {
                 if (!w) return;
+                if (w.element) w.element.style.display = "none";
                 w.computeSize = () => [0, -4];
                 w.type = "hidden";
             };
             const showSchemaWidget = (w) => {
                 if (!w) return;
+                if (w.element) w.element.style.display = w._newflowOrigDisplay ?? "";
                 w.computeSize = w._newflowOrigComputeSize;
                 w.type = w._newflowOrigType;
             };

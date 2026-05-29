@@ -235,14 +235,17 @@ app.registerExtension({
                 if (!w || w._newflowOrigComputeSize) return;
                 w._newflowOrigComputeSize = w.computeSize;
                 w._newflowOrigType = w.type;
+                w._newflowOrigDisplay = w.element?.style.display;
             };
             const hide = (w) => {
                 if (!w) return;
+                if (w.element) w.element.style.display = "none";
                 w.computeSize = () => [0, -4];
                 w.type = "hidden";
             };
             const show = (w) => {
                 if (!w) return;
+                if (w.element) w.element.style.display = w._newflowOrigDisplay ?? "";
                 w.computeSize = w._newflowOrigComputeSize;
                 w.type = w._newflowOrigType;
             };
