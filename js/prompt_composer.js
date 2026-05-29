@@ -1734,9 +1734,25 @@ app.registerExtension({
             const llmHost = document.createElement("div");
             llmHost.className = "newflow-pc-root";
 
-            // The LLM block needs read-access to substituted user/system text.
-            ctx.getUserText = () => serializeEditorToText(userBlock.editor);
-            ctx.getSystemText = () => serializeEditorToText(systemBlock.editor);
+            // The LLM block needs read-access to the user/system text that the
+            // workflow run would use. When a USER/SYSTEM socket is wired, that
+            // text comes from the upstream STRING (the editor is read-only/empty
+            // in that case), NOT the editor — so prefer the wired value here,
+            // exactly mirroring the Python execute():
+            //   user_src = user_wire if isinstance(user_wire, str) else editor.
+            // Without this, auto-/manual Generate sends empty prompts whenever
+            // USER/SYSTEM are driven by an upstream node, and the LLM just
+            // free-associates (e.g. describing an attached image).
+            const promptTextFor = (name, editor) => {
+                const inp = node.inputs?.find((i) => i.name === name);
+                if (inp != null && inp.link != null) {
+                    const up = readUpstreamStringForGenerate(node, name);
+                    if (up != null) return up;
+                }
+                return serializeEditorToText(editor);
+            };
+            ctx.getUserText = () => promptTextFor("USER", userBlock.editor);
+            ctx.getSystemText = () => promptTextFor("SYSTEM", systemBlock.editor);
 
             const llmBlock = makeOutputBlock(node, ctx);
 
