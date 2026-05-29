@@ -231,6 +231,12 @@ app.registerExtension({
             );
             const flattenWidget = node.widgets?.find((w) => w.name === "flatten_batches");
 
+            // ComfyUI gates widget visibility (both the canvas draw pass and the
+            // Vue DOM overlay) on `widget.hidden`: isVisible() is
+            // `!this.hidden && node.isWidgetVisible(this)`, and isWidgetVisible
+            // also checks `widget.hidden`. Setting type="hidden" or
+            // element.style.display alone is re-clobbered each frame, so
+            // `w.hidden = true` is the load-bearing flag. The rest is belt-and-braces.
             const stash = (w) => {
                 if (!w || w._newflowOrigComputeSize) return;
                 w._newflowOrigComputeSize = w.computeSize;
@@ -239,12 +245,16 @@ app.registerExtension({
             };
             const hide = (w) => {
                 if (!w) return;
+                w.hidden = true;
+                if (w.options) w.options.hidden = true;
                 if (w.element) w.element.style.display = "none";
                 w.computeSize = () => [0, -4];
                 w.type = "hidden";
             };
             const show = (w) => {
                 if (!w) return;
+                w.hidden = false;
+                if (w.options) w.options.hidden = false;
                 if (w.element) w.element.style.display = w._newflowOrigDisplay ?? "";
                 w.computeSize = w._newflowOrigComputeSize;
                 w.type = w._newflowOrigType;
@@ -254,7 +264,13 @@ app.registerExtension({
 
             const applyVisibility = () => {
                 const wardrobe = isWardrobe();
-                // wardrobe_labels panel: only visible in Wardrobe.
+                // wardrobe_labels panel: only visible in Wardrobe. Gate the DOM
+                // widget itself via .hidden so the Vue overlay fully removes it
+                // (host.style.display alone gets re-toggled by the render loop).
+                if (labelWidget) {
+                    labelWidget.hidden = !wardrobe;
+                    if (labelWidget.options) labelWidget.options.hidden = !wardrobe;
+                }
                 host.style.display = wardrobe ? "" : "none";
                 if (wardrobe) refresh();
                 // garment_N upload widgets: only visible in Wardrobe.
@@ -281,6 +297,16 @@ app.registerExtension({
                     return r;
                 };
             }
+
+            // Saved workflows restore the `mode` value during configure()
+            // (after onNodeCreated, without firing the widget callback), so
+            // re-apply visibility there too — otherwise a saved Wardrobe node
+            // would render with the default Slots layout.
+            const origConfigure = node.onConfigure;
+            node.onConfigure = function () {
+                origConfigure?.apply(this, arguments);
+                applyVisibility();
+            };
 
             applyVisibility();
         };

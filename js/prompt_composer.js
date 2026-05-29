@@ -1705,12 +1705,17 @@ app.registerExtension({
                     === "Templated";
 
             // Schema widgets (rendered by ComfyUI) for USER/SYSTEM. These are
-            // multiline String widgets — i.e. DOM widgets backed by a real
-            // <textarea> element. Hiding them needs three things together:
-            //   1. element.style.display = "none"  — kill the textarea
-            //   2. computeSize → [0, -4]            — collapse the row height
-            //   3. type = "hidden"                  — tell LiteGraph to skip
-            // Just setting type alone leaves the textarea visible.
+            // multiline String widgets — DOM widgets backed by a real
+            // <textarea> element rendered through ComfyUI's Vue overlay.
+            //
+            // The overlay re-runs every onDrawForeground and toggles each
+            // element's display from `widget.isVisible()`, which is defined as
+            // `!this.hidden && node.isWidgetVisible(this)` (and isWidgetVisible
+            // also checks `widget.hidden`). So the ONLY reliable hide flag is
+            //   widget.hidden = true
+            // — setting type="hidden" or element.style.display alone gets
+            // clobbered on the next frame because isVisible() still returns true.
+            // We also collapse computeSize and the element for belt-and-braces.
             const schemaUserWidget = node.widgets?.find((w) => w.name === "USER");
             const schemaSystemWidget = node.widgets?.find((w) => w.name === "SYSTEM");
 
@@ -1725,12 +1730,16 @@ app.registerExtension({
 
             const hideSchemaWidget = (w) => {
                 if (!w) return;
+                w.hidden = true;                          // gates isVisible() + isWidgetVisible()
+                if (w.options) w.options.hidden = true;
                 if (w.element) w.element.style.display = "none";
                 w.computeSize = () => [0, -4];
                 w.type = "hidden";
             };
             const showSchemaWidget = (w) => {
                 if (!w) return;
+                w.hidden = false;
+                if (w.options) w.options.hidden = false;
                 if (w.element) w.element.style.display = w._newflowOrigDisplay ?? "";
                 w.computeSize = w._newflowOrigComputeSize;
                 w.type = w._newflowOrigType;
@@ -1739,7 +1748,13 @@ app.registerExtension({
             const applyModeVisibility = () => {
                 const templated = isTemplated();
 
-                // Rich DOM editors.
+                // Rich DOM editors (user_prompt_state / system_prompt_state).
+                // Gate via .hidden too so the Vue overlay removes them outright
+                // in Plain mode rather than leaving a 0-height wrapper behind.
+                userWidget.hidden = !templated;
+                systemWidget.hidden = !templated;
+                if (userWidget.options) userWidget.options.hidden = !templated;
+                if (systemWidget.options) systemWidget.options.hidden = !templated;
                 userHost.style.display = templated ? "" : "none";
                 systemHost.style.display = templated ? "" : "none";
                 chipStrip.style.display = templated ? "" : "none";
@@ -1775,6 +1790,16 @@ app.registerExtension({
                     return r;
                 };
             }
+
+            // Loading a saved workflow restores the `mode` widget value during
+            // configure() — AFTER onNodeCreated and without firing the widget
+            // callback. Re-apply visibility then so a saved mode=Plain node
+            // doesn't render with the default Templated layout.
+            const origConfigure = node.onConfigure;
+            node.onConfigure = function () {
+                origConfigure?.apply(this, arguments);
+                applyModeVisibility();
+            };
 
             applyModeVisibility();
 
