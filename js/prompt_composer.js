@@ -24,7 +24,7 @@ export const DEFAULT_LLM_SETTINGS = {
     max_tokens: 4096,
     top_p: 0.9,
     num_ctx: 8192,
-    think: true,
+    think: false,
     auto_regen: false,
     auto_run_after_gen: true,
 };
@@ -1012,7 +1012,7 @@ export function openLlmSettings(currentSettings) {
         topPInput.value = merged.top_p;
         topPVal.textContent = String(merged.top_p);
         ctxInput.value = merged.num_ctx;
-        thinkInput.checked = merged.think !== false;
+        thinkInput.checked = merged.think === true;
         autoRegenInput.checked = !!merged.auto_regen;
         autoRunAfterGenInput.checked = merged.auto_run_after_gen !== false;
 
@@ -1288,7 +1288,7 @@ function makeOutputBlock(node, ctx) {
                             top_p: state.settings.top_p,
                             num_ctx: state.settings.num_ctx,
                         },
-                        think: state.settings.think !== false,
+                        think: state.settings.think === true,
                         ollama_url: state.settings.ollama_url,
                         node_id: String(node.id ?? ""),
                     }),
