@@ -1,11 +1,14 @@
 import { app } from "../../scripts/app.js";
-import { installPersistence } from "./_persistence.js";
 
 const NODE_NAME = "NewflowPromptComposer";
 const LEGACY_SIMPLE_NAME = "NewflowPromptComposerSimple";
 const USER_WIDGET = "user_prompt_state";
 const SYSTEM_WIDGET = "system_prompt_state";
 const LLM_WIDGET = "llm_output_state";
+// Editor + LLM state round-trips through node.properties (not widgets_values)
+// to dodge the frontend's migrateWidgetsValues() forceInput-stripping pass —
+// see the long note at the addDOMWidget calls for why.
+const PROP_KEY = "newflow_pc_state";
 const TOKEN_RE = /\[\[\s*([^\[\]]+?)\s*\]\]/g;
 const MIN_WIDTH = 640;
 
@@ -1671,6 +1674,55 @@ function realignLegacyComposerNode(nodeData) {
     ];
 }
 
+// ---------------------------------------------------------------------------
+// Lift editor/LLM state from the legacy widgets_values channel into
+// node.properties.
+//
+// The current node persists USER/SYSTEM/LLM state through node.properties (the
+// DOM widgets carry serialize=false), because the new frontend's
+// migrateWidgetsValues() strips our DOM-widget slots out of widgets_values on
+// load. Old saved workflows still carry that state in widgets_values, in the
+// canonical [mode, user, system, llm] shape the two shims above produce. This
+// runs last in beforeConfigureGraph — while widgets_values is still intact,
+// before the node is built and migrateWidgetsValues runs — to move that state
+// into properties and collapse widgets_values down to the single [mode] slot
+// the current node serializes. Idempotent: new-format saves (length-1
+// widgets_values + an existing properties blob) are left untouched.
+// ---------------------------------------------------------------------------
+function liftComposerStateToProperties(nodeData) {
+    if (!nodeData || nodeData.type !== NODE_NAME) return;
+    const wv = Array.isArray(nodeData.widgets_values) ? nodeData.widgets_values : [];
+    if (wv.length === 0) return;
+    nodeData.properties = nodeData.properties || {};
+
+    // New-format save: only the mode combo lives in widgets_values; the editor
+    // states already round-trip through properties. Nothing to lift.
+    if (nodeData.properties[PROP_KEY] && wv.length <= 1) return;
+
+    const mode = wv[0] === "Plain" ? "Plain" : "Templated";
+    if (!nodeData.properties[PROP_KEY] && wv.length > 1) {
+        const userRaw = typeof wv[1] === "string" ? wv[1] : "{}";
+        const systemRaw = typeof wv[2] === "string" ? wv[2] : "{}";
+        const llmRaw = typeof wv[3] === "string" ? wv[3] : "{}";
+        let displayMode = "source";
+        try {
+            const u = JSON.parse(userRaw || "{}");
+            if (u && DISPLAY_MODES.some((m) => m.value === u.displayMode)) {
+                displayMode = u.displayMode;
+            }
+        } catch {
+            /* keep default */
+        }
+        nodeData.properties[PROP_KEY] = {
+            user: userRaw,
+            system: systemRaw,
+            llm: llmRaw,
+            displayMode,
+        };
+    }
+    nodeData.widgets_values = [mode];
+}
+
 app.registerExtension({
     name: "newflow.prompt_composer",
 
@@ -1679,6 +1731,7 @@ app.registerExtension({
         for (const node of graphData.nodes) {
             migrateLegacySimpleNode(node);
             realignLegacyComposerNode(node);
+            liftComposerStateToProperties(node);
         }
     },
 
@@ -1852,52 +1905,80 @@ app.registerExtension({
                 getValue: () => llmBlock.getValue(),
             });
 
+            // Keep these three editor states OUT of widgets_values, but still IN
+            // the prompt. The new ComfyUI frontend runs migrateWidgetsValues()
+            // during configure(): it counts our forceInput inputs
+            // (USER/SYSTEM/OPTIONS) and, because that count happens to equal our
+            // serialized-widget count (mode + 3 DOM widgets = 4), mistakes these
+            // DOM slots for forceInput-aligned ones and strips three of the four
+            // saved slots — wiping the LLM settings (model, max_tokens, …) back
+            // to defaults on every reload.
+            //   - widget.serialize = false   -> excluded from widgets_values, so
+            //     migrateWidgetsValues sees only the single [mode] slot and
+            //     leaves it alone.
+            //   - options.serialize stays true -> graphToPrompt still sends the
+            //     user/system/llm states to Python, so USER/SYSTEM/OUTPUT keep
+            //     working.
+            // The states round-trip through node.properties instead (below),
+            // which migrateWidgetsValues never touches.
+            userWidget.serialize = false;
+            systemWidget.serialize = false;
+            llmWidget.serialize = false;
 
-            persist = installPersistence(node, {
-                nodeClass: NODE_NAME,
-                schema: "NewflowPromptComposer.v2",
-                widgetNames: [USER_WIDGET, SYSTEM_WIDGET, LLM_WIDGET],
-                extractFromWidgets: ([userRaw, systemRaw, llmRaw]) => {
-                    const userParsed = deserializeState(userRaw || "{}");
-                    return {
-                        user: userRaw || "{}",
-                        system: systemRaw || "{}",
-                        llm: llmRaw || "{}",
-                        displayMode:
-                            userParsed.displayMode
-                            && DISPLAY_MODES.some(
-                                (m) => m.value === userParsed.displayMode,
-                            )
-                                ? userParsed.displayMode
-                                : "source",
-                    };
-                },
-                getState: () => ({
-                    user: userBlock.getValue(),
-                    system: systemBlock.getValue(),
-                    llm: llmBlock.getValue(),
-                    displayMode: ctx.displayMode,
-                }),
-                setState: (s) => {
-                    if (
-                        s.displayMode
-                        && DISPLAY_MODES.some((m) => m.value === s.displayMode)
-                    ) {
-                        ctx.displayMode = s.displayMode;
-                        displaySel.value = ctx.displayMode;
-                    }
-                    if (s.user) userBlock.setValue(s.user);
-                    if (s.system) systemBlock.setValue(s.system);
-                    if (s.llm) llmBlock.setValue(s.llm);
-                    refreshAll();
-                },
-                defaultState: () => ({
-                    user: "{}",
-                    system: "{}",
-                    llm: "{}",
-                    displayMode: "source",
-                }),
+            persist = { markDirty: () => {} };
+
+            const captureComposerState = () => ({
+                user: userBlock.getValue(),
+                system: systemBlock.getValue(),
+                llm: llmBlock.getValue(),
+                displayMode: ctx.displayMode,
             });
+
+            const applyComposerState = (s) => {
+                if (!s || typeof s !== "object") return;
+                if (
+                    s.displayMode
+                    && DISPLAY_MODES.some((m) => m.value === s.displayMode)
+                ) {
+                    ctx.displayMode = s.displayMode;
+                    displaySel.value = ctx.displayMode;
+                }
+                if (s.user) userBlock.setValue(s.user);
+                if (s.system) systemBlock.setValue(s.system);
+                if (s.llm) llmBlock.setValue(s.llm);
+                refreshAll();
+            };
+
+            const origComposerSerialize = node.onSerialize;
+            node.onSerialize = function (o) {
+                const ret = origComposerSerialize?.apply(this, arguments);
+                try {
+                    const st = captureComposerState();
+                    this.properties = this.properties || {};
+                    this.properties[PROP_KEY] = st;
+                    // serialize() clones this.properties into `o` BEFORE calling
+                    // onSerialize, so also write the fresh state straight into o.
+                    if (o) {
+                        o.properties = o.properties || {};
+                        o.properties[PROP_KEY] = st;
+                    }
+                } catch (err) {
+                    console.warn("[newflow:PromptComposer] serialize failed:", err);
+                }
+                return ret;
+            };
+
+            const origComposerConfigure = node.onConfigure;
+            node.onConfigure = function () {
+                const ret = origComposerConfigure?.apply(this, arguments);
+                try {
+                    const saved = this.properties?.[PROP_KEY];
+                    if (saved) applyComposerState(saved);
+                } catch (err) {
+                    console.warn("[newflow:PromptComposer] configure failed:", err);
+                }
+                return ret;
+            };
 
             // Mode visibility: a plain io.Combo widget named "mode" drives
             // behaviour. The USER and SYSTEM rich editors are IDENTICAL in both
