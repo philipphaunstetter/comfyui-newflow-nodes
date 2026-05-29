@@ -313,6 +313,15 @@ export function readUpstreamStringForGenerate(node, inputName) {
         const w = src.widgets?.find((x) => x.name === outName);
         if (w && typeof w.value === "string") return w.value;
     }
+    // Primitive string / text nodes name their widget differently from the
+    // STRING output (commonly "value" or "text"). Try the usual names, then
+    // fall back to the sole string-valued widget if it's unambiguous.
+    for (const cand of ["value", "text", "string", "STRING", "Text", "prompt"]) {
+        const w = src.widgets?.find((x) => x.name === cand);
+        if (w && typeof w.value === "string") return w.value;
+    }
+    const stringWidgets = (src.widgets || []).filter((x) => typeof x.value === "string");
+    if (stringWidgets.length === 1) return stringWidgets[0].value;
     return null;
 }
 
@@ -851,26 +860,60 @@ function makeEditorBlock(node, title, ctx) {
     block.append(head, editor);
 
     let state = { text: "" };
+    // When an upstream STRING is wired to this prompt's input socket, we show
+    // that incoming value here read-only (display only — the editor's own saved
+    // content in `state` is never touched, so disconnecting restores it).
+    let overriding = false;
+    const basePlaceholder = editor.dataset.placeholder;
 
     const api = {
         dom: block,
         editor,
         getValue: () => {
-            state.text = serializeEditorToText(editor);
+            // While overriding, the editor shows the wired value, not the
+            // user's content — read from `state` so we never persist the
+            // upstream value into this node's own widget.
+            if (!overriding) state.text = serializeEditorToText(editor);
             return serializeState(state);
         },
         setValue: (v) => {
             const parsed = deserializeState(v);
             state = { text: parsed.text || "" };
-            renderEditorFromText(editor, state.text, ctx.keys, ctx.displayMode, ctx.values);
+            if (!overriding) {
+                renderEditorFromText(editor, state.text, ctx.keys, ctx.displayMode, ctx.values);
+            }
         },
         refresh: (keys, values, displayMode) => {
             ctx.keys = keys;
             ctx.values = values;
             ctx.displayMode = displayMode;
-            refreshPillsInPlace(editor, keys, displayMode, values);
+            if (!overriding) refreshPillsInPlace(editor, keys, displayMode, values);
+        },
+        isOverriding: () => overriding,
+        // Show the wired upstream value read-only. Idempotent: re-calling with
+        // the same text is a no-op, so the 1 s poll can keep it live-synced to
+        // upstream edits without DOM churn.
+        showOverride: (text) => {
+            const next = String(text ?? "");
+            if (!overriding) {
+                state.text = serializeEditorToText(editor); // preserve own content
+                overriding = true;
+                editor.contentEditable = "false";
+                editor.classList.add("newflow-pc-editor-wired");
+                editor.dataset.placeholder = "Driven by the wired input.";
+            }
+            if (editor.textContent !== next) editor.textContent = next;
+        },
+        clearOverride: () => {
+            if (!overriding) return;
+            overriding = false;
+            editor.contentEditable = "true";
+            editor.classList.remove("newflow-pc-editor-wired");
+            editor.dataset.placeholder = basePlaceholder;
+            renderEditorFromText(editor, state.text, ctx.keys, ctx.displayMode, ctx.values);
         },
         insertPill: (key) => {
+            if (overriding) return;
             const pill = makePill(key, ctx.keys, ctx.displayMode, ctx.values);
             const sel = window.getSelection();
             const range = sel.rangeCount ? sel.getRangeAt(0) : null;
@@ -894,6 +937,7 @@ function makeEditorBlock(node, title, ctx) {
     };
 
     editor.addEventListener("blur", () => {
+        if (overriding) return;
         scanAndConvert(editor, ctx.keys, ctx.displayMode, ctx.values);
         state.text = serializeEditorToText(editor);
         ctx.notifyChanged?.();
@@ -1719,14 +1763,20 @@ app.registerExtension({
                 const inp = node.inputs?.find((i) => i.name === name);
                 return inp != null && inp.link != null;
             };
-            const applyEditorOverride = (editor, wired) => {
-                if (!editor) return;
-                editor.contentEditable = wired ? "false" : "true";
-                editor.style.opacity = wired ? "0.45" : "";
-                editor.style.pointerEvents = wired ? "none" : "";
-                editor.title = wired
-                    ? "Driven by the wired input — disconnect it to edit here."
-                    : "";
+            // When a USER/SYSTEM socket is wired, resolve the upstream STRING
+            // on the frontend (no workflow run needed) and render it read-only
+            // in the editor; on disconnect, restore the editor's own content.
+            const applyEditorOverride = (block, name) => {
+                if (!block) return;
+                if (isInputConnected(name)) {
+                    const upstream = readUpstreamStringForGenerate(node, name);
+                    block.showOverride(upstream != null ? upstream : "");
+                    block.editor.title =
+                        "Driven by the wired input — disconnect it to edit here.";
+                } else {
+                    block.clearOverride();
+                    block.editor.title = "";
+                }
             };
 
             const refreshAll = () => {
@@ -1740,8 +1790,8 @@ app.registerExtension({
                 });
                 userBlock.refresh(ctx.keys, ctx.values, ctx.displayMode);
                 systemBlock.refresh(ctx.keys, ctx.values, ctx.displayMode);
-                applyEditorOverride(userBlock.editor, isInputConnected("USER"));
-                applyEditorOverride(systemBlock.editor, isInputConnected("SYSTEM"));
+                applyEditorOverride(userBlock, "USER");
+                applyEditorOverride(systemBlock, "SYSTEM");
                 llmBlock.refreshImageBadge?.();
             };
 
