@@ -2,6 +2,7 @@ import { app } from "../../scripts/app.js";
 import { installPersistence } from "./_persistence.js";
 
 const NODE_NAME = "NewflowPromptComposer";
+const LEGACY_SIMPLE_NAME = "NewflowPromptComposerSimple";
 const USER_WIDGET = "user_prompt_state";
 const SYSTEM_WIDGET = "system_prompt_state";
 const LLM_WIDGET = "llm_output_state";
@@ -1211,8 +1212,13 @@ function makeOutputBlock(node, ctx) {
             throw wrapErr("No model selected — open settings and pick one.");
         }
 
-        const userText = resolveTextForLlm(ctx.getUserText?.() || "", ctx.values || {});
-        const systemText = resolveTextForLlm(ctx.getSystemText?.() || "", ctx.values || {});
+        // Plain mode emits the prompts verbatim; only Templated substitutes
+        // [[Key]] tokens from the OPTIONS values.
+        const templated = ctx.isTemplated?.() ?? true;
+        const userRaw = ctx.getUserText?.() || "";
+        const systemRaw = ctx.getSystemText?.() || "";
+        const userText = templated ? resolveTextForLlm(userRaw, ctx.values || {}) : userRaw;
+        const systemText = templated ? resolveTextForLlm(systemRaw, ctx.values || {}) : systemRaw;
 
         // Activate the running UI immediately so the button reads "Stop" and
         // the status badge updates during the preflight phases (healthcheck +
@@ -1515,8 +1521,49 @@ function makeOutputBlock(node, ctx) {
 // extension
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Legacy NewflowPromptComposerSimple → NewflowPromptComposer migration.
+//
+// NodeReplace (server-side) can set mode=Plain and remap the outputs, but it
+// can't transform the old plain-text USER/SYSTEM widget values into the new
+// JSON-shaped DOM-widget states (user_prompt_state / system_prompt_state). We
+// do that here, in beforeConfigureGraph, before ComfyUI builds the node from
+// the saved JSON. Renaming the type here also means NodeReplace never has to
+// fire for these nodes — but it stays registered as a server-side safety net.
+//
+// Old Simple node widgets_values were positional:
+//   [USER_text, SYSTEM_text, llm_output_state]
+// (IMAGES / IMAGE_LIST are sockets, not widgets.) The new node's widget order
+// is [mode, user_prompt_state, system_prompt_state, llm_output_state].
+// ---------------------------------------------------------------------------
+function migrateLegacySimpleNode(nodeData) {
+    if (!nodeData || nodeData.type !== LEGACY_SIMPLE_NAME) return;
+
+    const wv = Array.isArray(nodeData.widgets_values) ? nodeData.widgets_values : [];
+    const userText = typeof wv[0] === "string" ? wv[0] : "";
+    const systemText = typeof wv[1] === "string" ? wv[1] : "";
+    const llmRaw = wv[2] ?? "{}";
+
+    nodeData.type = NODE_NAME;
+    nodeData.comfyClass = NODE_NAME;
+    nodeData.widgets_values = [
+        "Plain",
+        JSON.stringify({ text: userText, displayMode: "source" }),
+        JSON.stringify({ text: systemText }),
+        llmRaw,
+    ];
+}
+
 app.registerExtension({
     name: "newflow.prompt_composer",
+
+    async beforeConfigureGraph(graphData) {
+        if (!graphData || !Array.isArray(graphData.nodes)) return;
+        for (const node of graphData.nodes) {
+            migrateLegacySimpleNode(node);
+        }
+    },
+
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== NODE_NAME) return;
 
@@ -1694,90 +1741,77 @@ app.registerExtension({
             });
 
             // Mode visibility: a plain io.Combo widget named "mode" drives
-            // which editor block is visible.
-            //   Templated → rich USER/SYSTEM editors (DOM); the schema-level
-            //               USER and SYSTEM multiline widgets are hidden.
-            //   Plain     → schema USER and SYSTEM multiline widgets show;
-            //               the rich DOM editors collapse to 0 height.
-            // The LLM output editor stays in both modes.
+            // behaviour. The USER and SYSTEM rich editors are IDENTICAL in both
+            // modes and stay mounted — there is only ONE set of editors, so
+            // prompt content carries across mode switches with no value/format
+            // mismatch. Only two things change with mode:
+            //   Templated → OPTIONS socket visible; [[Key]] chip strip shown;
+            //               [[Key]] tokens substituted from OPTIONS at generate.
+            //   Plain     → OPTIONS socket removed; chip strip hidden; prompts
+            //               emitted verbatim (no [[Key]] substitution).
             const isTemplated = () =>
                 (node.widgets?.find((w) => w.name === "mode")?.value || "Templated")
                     === "Templated";
+            ctx.isTemplated = isTemplated;
 
-            // Schema widgets (rendered by ComfyUI) for USER/SYSTEM. These are
-            // multiline String widgets — DOM widgets backed by a real
-            // <textarea> element rendered through ComfyUI's Vue overlay.
-            //
-            // The overlay re-runs every onDrawForeground and toggles each
-            // element's display from `widget.isVisible()`, which is defined as
-            // `!this.hidden && node.isWidgetVisible(this)` (and isWidgetVisible
-            // also checks `widget.hidden`). So the ONLY reliable hide flag is
-            //   widget.hidden = true
-            // — setting type="hidden" or element.style.display alone gets
-            // clobbered on the next frame because isVisible() still returns true.
-            // We also collapse computeSize and the element for belt-and-braces.
-            const schemaUserWidget = node.widgets?.find((w) => w.name === "USER");
-            const schemaSystemWidget = node.widgets?.find((w) => w.name === "SYSTEM");
+            // OPTIONS is a force_input socket (no widget). Input sockets can't
+            // be hidden with a .hidden flag the way widgets can, so we remove
+            // the socket entirely in Plain mode and re-add it for Templated.
+            // Capture the upstream link before removal and restore it on re-add
+            // so toggling modes doesn't silently drop a wired connection.
+            const OPTIONS_NAME = "OPTIONS";
+            const findOptionsIdx = () =>
+                node.inputs?.findIndex((i) => i.name === OPTIONS_NAME) ?? -1;
 
-            const stashWidget = (w) => {
-                if (!w || w._newflowOrigComputeSize) return;
-                w._newflowOrigComputeSize = w.computeSize;
-                w._newflowOrigType = w.type;
-                w._newflowOrigDisplay = w.element?.style.display;
+            const hideOptionsInput = () => {
+                const idx = findOptionsIdx();
+                if (idx < 0) return; // already removed
+                const input = node.inputs[idx];
+                node._newflowOptionsLink = null;
+                if (input?.link != null && node.graph) {
+                    const link = node.graph.links?.[input.link];
+                    if (link) {
+                        node._newflowOptionsLink = {
+                            originId: link.origin_id,
+                            originSlot: link.origin_slot,
+                        };
+                    }
+                }
+                node.removeInput(idx);
             };
-            stashWidget(schemaUserWidget);
-            stashWidget(schemaSystemWidget);
 
-            const hideSchemaWidget = (w) => {
-                if (!w) return;
-                w.hidden = true;                          // gates isVisible() + isWidgetVisible()
-                if (w.options) w.options.hidden = true;
-                if (w.element) w.element.style.display = "none";
-                w.computeSize = () => [0, -4];
-                w.type = "hidden";
-            };
-            const showSchemaWidget = (w) => {
-                if (!w) return;
-                w.hidden = false;
-                if (w.options) w.options.hidden = false;
-                if (w.element) w.element.style.display = w._newflowOrigDisplay ?? "";
-                w.computeSize = w._newflowOrigComputeSize;
-                w.type = w._newflowOrigType;
+            const showOptionsInput = () => {
+                if (findOptionsIdx() >= 0) return; // already present
+                node.addInput(OPTIONS_NAME, "STRING");
+                const saved = node._newflowOptionsLink;
+                node._newflowOptionsLink = null;
+                if (saved && node.graph) {
+                    const origin = node.graph.getNodeById?.(saved.originId);
+                    const idx = findOptionsIdx();
+                    if (origin && idx >= 0) {
+                        origin.connect?.(saved.originSlot, node, idx);
+                    }
+                }
             };
 
             const applyModeVisibility = () => {
                 const templated = isTemplated();
-
-                // Rich DOM editors (user_prompt_state / system_prompt_state).
-                // Gate via .hidden too so the Vue overlay removes them outright
-                // in Plain mode rather than leaving a 0-height wrapper behind.
-                userWidget.hidden = !templated;
-                systemWidget.hidden = !templated;
-                if (userWidget.options) userWidget.options.hidden = !templated;
-                if (systemWidget.options) systemWidget.options.hidden = !templated;
-                userHost.style.display = templated ? "" : "none";
-                systemHost.style.display = templated ? "" : "none";
+                // Chip strip ([[Key]] pills) only makes sense when OPTIONS feeds
+                // keys in — hide it in Plain mode but keep the editor itself.
                 chipStrip.style.display = templated ? "" : "none";
-
-                // Schema USER/SYSTEM multilines — opposite visibility.
-                if (templated) {
-                    hideSchemaWidget(schemaUserWidget);
-                    hideSchemaWidget(schemaSystemWidget);
-                } else {
-                    showSchemaWidget(schemaUserWidget);
-                    showSchemaWidget(schemaSystemWidget);
-                }
-
-                // Force a re-layout so the node height adjusts.
+                if (templated) showOptionsInput();
+                else hideOptionsInput();
+                // Force a re-layout so the node height/sockets settle.
                 if (Array.isArray(node.size)) {
                     node.setSize?.(node.computeSize?.() || node.size);
                 }
                 node.setDirtyCanvas?.(true, true);
             };
 
-            // DOM editor heights: full height in Templated mode, 0 in Plain.
-            userWidget.computeSize = (w) => [w, isTemplated() ? FIXED_USER_WIDGET_H : 0];
-            systemWidget.computeSize = (w) => [w, isTemplated() ? FIXED_SYSTEM_WIDGET_H : 0];
+            // DOM editor heights are fixed in BOTH modes — the editors are
+            // always present, so there is no mode-dependent collapse.
+            userWidget.computeSize = (w) => [w, FIXED_USER_WIDGET_H];
+            systemWidget.computeSize = (w) => [w, FIXED_SYSTEM_WIDGET_H];
             llmWidget.computeSize = (w) => [w, FIXED_LLM_WIDGET_H];
 
             // Watch the mode combo and re-apply on every switch.
@@ -1810,14 +1844,11 @@ app.registerExtension({
             //   1. node.size — direct property
             //   2. node.computeSize — what LiteGraph asks for sizing
             //   3. node.onResize — clamp on user drag
-            const minHForMode = () =>
-                isTemplated() ? MIN_HEIGHT : FIXED_LLM_WIDGET_H + NODE_CHROME_H;
-
+            // Both editors are always present, so the floor is constant.
             const applyMinSize = () => {
                 if (!Array.isArray(node.size)) return;
                 if (node.size[0] < MIN_WIDTH) node.size[0] = MIN_WIDTH;
-                const minH = minHForMode();
-                if (node.size[1] < minH) node.size[1] = minH;
+                if (node.size[1] < MIN_HEIGHT) node.size[1] = MIN_HEIGHT;
                 node.setSize?.(node.size);
                 node.setDirtyCanvas?.(true, true);
             };
@@ -1826,13 +1857,7 @@ app.registerExtension({
             node.computeSize = function (out) {
                 const r = origComputeSize?.call(this, out) || [MIN_WIDTH, MIN_HEIGHT];
                 if (r[0] < MIN_WIDTH) r[0] = MIN_WIDTH;
-                // In Plain mode the rich USER/SYSTEM editors collapse to 0 —
-                // only the LLM editor + chrome contribute to the floor. The
-                // schema USER/SYSTEM widgets size themselves.
-                const minH = isTemplated()
-                    ? MIN_HEIGHT
-                    : FIXED_LLM_WIDGET_H + NODE_CHROME_H;
-                if (r[1] < minH) r[1] = minH;
+                if (r[1] < MIN_HEIGHT) r[1] = MIN_HEIGHT;
                 return r;
             };
 
@@ -1841,8 +1866,7 @@ app.registerExtension({
             node.onResize = function (size) {
                 if (Array.isArray(size)) {
                     if (size[0] < MIN_WIDTH) size[0] = MIN_WIDTH;
-                    const minH = minHForMode();
-                    if (size[1] < minH) size[1] = minH;
+                    if (size[1] < MIN_HEIGHT) size[1] = MIN_HEIGHT;
                 }
                 origOnResize?.apply(this, arguments);
             };

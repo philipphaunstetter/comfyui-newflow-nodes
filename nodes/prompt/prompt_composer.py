@@ -37,16 +37,17 @@ class NewflowPromptComposer(io.ComfyNode):
             display_name="Newflow Prompt Composer",
             category="newflow/prompt",
             description=(
-                "Composes USER, SYSTEM, and LLM-OUTPUT strings. In Templated "
-                "mode, [[Key]] placeholders substitute from the OPTIONS JSON "
-                "input (e.g. from Newflow Dynamic Dropdowns); missing keys "
-                "render as [MISSING: Key]. In Plain mode, USER and SYSTEM are "
-                "direct multi-line STRING inputs with no substitution. Both "
-                "modes share the LLM Output editor (streamed from Ollama), the "
-                "image inputs, and the settings dialog. Accepts images via "
-                "IMAGES (padded IMAGE batch) or IMAGE_LIST (native-resolution "
-                "list from Newflow Image Batch) — vision LLMs see each image "
-                "at full quality with no padding."
+                "Composes USER, SYSTEM, and LLM-OUTPUT strings from the same "
+                "rich editors in both modes. In Templated mode, [[Key]] "
+                "placeholders substitute from the OPTIONS JSON input (e.g. from "
+                "Newflow Dynamic Dropdowns); missing keys render as "
+                "[MISSING: Key]. In Plain mode, the prompts are emitted "
+                "verbatim and the OPTIONS socket is hidden. Both modes share "
+                "the LLM Output editor (streamed from Ollama), the image "
+                "inputs, and the settings dialog. Accepts images via IMAGES "
+                "(padded IMAGE batch) or IMAGE_LIST (native-resolution list "
+                "from Newflow Image Batch) — vision LLMs see each image at "
+                "full quality with no padding."
             ),
             inputs=[
                 # Flat schema — every input lives at the top level so each
@@ -78,28 +79,7 @@ class NewflowPromptComposer(io.ComfyNode):
                     tooltip=(
                         "JSON of {label: value} from Newflow Dynamic Dropdowns. "
                         "Drives [[Key]] substitution in Templated mode. "
-                        "Ignored in Plain mode."
-                    ),
-                ),
-                io.String.Input(
-                    "USER",
-                    multiline=True,
-                    optional=True,
-                    default="",
-                    tooltip=(
-                        "Plain-mode user prompt. Type directly or wire an "
-                        "upstream STRING. Ignored in Templated mode "
-                        "(the rich editor is the source of truth there)."
-                    ),
-                ),
-                io.String.Input(
-                    "SYSTEM",
-                    multiline=True,
-                    optional=True,
-                    default="",
-                    tooltip=(
-                        "Plain-mode system prompt. Type directly or wire an "
-                        "upstream STRING. Ignored in Templated mode."
+                        "Hidden in Plain mode (the frontend removes the socket)."
                     ),
                 ),
                 io.Combo.Input(
@@ -123,7 +103,7 @@ class NewflowPromptComposer(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, mode, IMAGES=None, IMAGE_LIST=None, OPTIONS="{}", USER="", SYSTEM=""):
+    def execute(cls, mode, IMAGES=None, IMAGE_LIST=None, OPTIONS="{}"):
         # With is_input_list=True, every input arrives as a (length-1) list.
         selected = cls._unwrap(mode, default=MODE_TEMPLATED) or MODE_TEMPLATED
         options_raw = cls._unwrap(OPTIONS, default="{}")
@@ -133,17 +113,18 @@ class NewflowPromptComposer(io.ComfyNode):
         node_inputs = prompt.get(unique_id, {}).get("inputs", {})
         llm_text = cls._read_state_text(node_inputs.get(cls.LLM_WIDGET))
 
+        # USER/SYSTEM come from the same rich-editor widget states
+        # (user_prompt_state, system_prompt_state) in BOTH modes — the editors
+        # are identical regardless of mode. Mode only decides whether [[Key]]
+        # placeholders are substituted from the OPTIONS JSON.
+        user_state = cls._read_state_text(node_inputs.get(cls.USER_WIDGET))
+        system_state = cls._read_state_text(node_inputs.get(cls.SYSTEM_WIDGET))
+
         if selected == MODE_PLAIN:
-            # Plain mode: USER / SYSTEM schema inputs are the source of truth.
-            user_out = cls._unwrap(USER, default="") or ""
-            system_out = cls._unwrap(SYSTEM, default="") or ""
+            user_out = user_state
+            system_out = system_state
         else:
-            # Templated mode: rich-editor widget states (user_prompt_state,
-            # system_prompt_state) drive the output; substitute [[Key]] using
-            # the OPTIONS JSON.
             vars_dict = cls._parse_vars(options_raw)
-            user_state = cls._read_state_text(node_inputs.get(cls.USER_WIDGET))
-            system_state = cls._read_state_text(node_inputs.get(cls.SYSTEM_WIDGET))
             user_out = cls._substitute(user_state, vars_dict)
             system_out = cls._substitute(system_state, vars_dict)
 

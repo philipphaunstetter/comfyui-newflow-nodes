@@ -20,17 +20,18 @@ class NewflowExtension(ComfyExtension):
         api = ComfyAPI()
 
         # Prompt Composer (Simple) → Prompt Composer (Plain mode).
-        # All inputs are top-level on the merged node — clean 1:1 mapping.
-        # mode is set to Plain so the JS hides the rich editors and shows
-        # the schema USER/SYSTEM multilines (which match the old layout).
+        # The merged node keeps a single set of rich USER/SYSTEM editors whose
+        # text lives in DOM-widget state (user_prompt_state / system_prompt_state),
+        # not in schema inputs — so there are no USER/SYSTEM inputs to remap here.
+        # The old plain-text widget values are reshaped into that JSON state by
+        # the JS beforeConfigureGraph shim in js/prompt_composer.js (which also
+        # renames the type, so this registration is really a server-side safety
+        # net). All we do server-side is force mode=Plain and carry the outputs.
         await api.node_replacement.register(io.NodeReplace(
             new_node_id="NewflowPromptComposer",
             old_node_id="NewflowPromptComposerSimple",
-            old_widget_ids=["USER", "SYSTEM", "llm_output_state"],
             input_mapping=[
                 {"new_id": "mode", "set_value": "Plain"},
-                {"new_id": "USER", "old_id": "USER"},
-                {"new_id": "SYSTEM", "old_id": "SYSTEM"},
             ],
             output_mapping=[
                 {"new_idx": 0, "old_idx": 0},  # USER
