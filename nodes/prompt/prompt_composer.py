@@ -49,16 +49,13 @@ class NewflowPromptComposer(io.ComfyNode):
                 "at full quality with no padding."
             ),
             inputs=[
-                # Top-level data inputs. They're always visible (in both modes)
-                # but only consumed by the matching branch in execute() — same
-                # pattern as ImageBatch's IMAGE_N sockets being shared across
-                # Slots/Wardrobe modes. We deliberately do NOT nest these
-                # inside the DynamicCombo because:
-                #  (1) io.DynamicCombo.Input cannot be the *first* schema input
-                #      (the frontend addInputs chain crashes), and
-                #  (2) nested String inputs don't reliably render an input
-                #      socket — wires drawn to a nested OPTIONS land in dead
-                #      space and the JS upstream-detection misses them.
+                # Flat schema — every input lives at the top level so each
+                # gets a proper, predictable socket. The `mode` Combo at the
+                # bottom is just a plain widget; the JS uses its value to
+                # show/hide the rich editor block vs the plain widgets, but
+                # the schema does not gate inputs on mode. This intentionally
+                # mirrors the union of the old Composer + Composer Simple
+                # schemas plus a mode switcher.
                 io.Image.Input(
                     "IMAGES",
                     optional=True,
@@ -68,10 +65,9 @@ class NewflowPromptComposer(io.ComfyNode):
                     "IMAGE_LIST",
                     optional=True,
                     tooltip=(
-                        "Optional IMAGE_LIST input — accepts the IMAGE_LIST "
-                        "output of Newflow Image Batch. Each image keeps its "
-                        "native dimensions (no padding) so vision LLMs see "
-                        "them at full quality."
+                        "Optional IMAGE_LIST input — native-resolution list "
+                        "from Newflow Image Batch. Each image keeps its "
+                        "native dimensions for vision LLMs."
                     ),
                 ),
                 io.String.Input(
@@ -80,60 +76,40 @@ class NewflowPromptComposer(io.ComfyNode):
                     optional=True,
                     force_input=True,
                     tooltip=(
-                        "JSON of {label: value} from Newflow Dynamic Dropdowns "
-                        "or any STRING source. Drives [[Key]] substitution in "
-                        "Templated mode. Ignored in Plain mode."
+                        "JSON of {label: value} from Newflow Dynamic Dropdowns. "
+                        "Drives [[Key]] substitution in Templated mode. "
+                        "Ignored in Plain mode."
                     ),
                 ),
-                io.DynamicCombo.Input(
-                    "mode",
-                    options=[
-                        io.DynamicCombo.Option(
-                            MODE_TEMPLATED,
-                            [
-                                # Templated mode needs at least one widget in
-                                # its sub-inputs to bypass the frontend's
-                                # "all-sockets" crash. display_mode controls
-                                # how variable pills render in the rich
-                                # editors — promoted here from the old
-                                # frontend-only dropdown.
-                                io.Combo.Input(
-                                    "display_mode",
-                                    options=["source", "sourceValue", "valueOnly"],
-                                    default="source",
-                                    tooltip=(
-                                        "Pill rendering in the rich editors. "
-                                        "'source' shows just the key, 'sourceValue' "
-                                        "shows 'Key: value', 'valueOnly' shows "
-                                        "only the value (or '[MISSING]')."
-                                    ),
-                                ),
-                            ],
-                        ),
-                        io.DynamicCombo.Option(
-                            MODE_PLAIN,
-                            [
-                                io.String.Input(
-                                    "USER",
-                                    multiline=True,
-                                    optional=True,
-                                    default="",
-                                    tooltip="User prompt text. Type directly or wire an upstream STRING.",
-                                ),
-                                io.String.Input(
-                                    "SYSTEM",
-                                    multiline=True,
-                                    optional=True,
-                                    default="",
-                                    tooltip="System prompt text. Type directly or wire an upstream STRING.",
-                                ),
-                            ],
-                        ),
-                    ],
+                io.String.Input(
+                    "USER",
+                    multiline=True,
+                    optional=True,
+                    default="",
                     tooltip=(
-                        "Templated: rich editors with [[Key]] pills, OPTIONS "
-                        "JSON drives substitution. Plain: direct USER and "
-                        "SYSTEM text fields, no substitution."
+                        "Plain-mode user prompt. Type directly or wire an "
+                        "upstream STRING. Ignored in Templated mode "
+                        "(the rich editor is the source of truth there)."
+                    ),
+                ),
+                io.String.Input(
+                    "SYSTEM",
+                    multiline=True,
+                    optional=True,
+                    default="",
+                    tooltip=(
+                        "Plain-mode system prompt. Type directly or wire an "
+                        "upstream STRING. Ignored in Templated mode."
+                    ),
+                ),
+                io.Combo.Input(
+                    "mode",
+                    options=[MODE_TEMPLATED, MODE_PLAIN],
+                    default=MODE_TEMPLATED,
+                    tooltip=(
+                        "Templated: rich [[Key]] editors with slash-menu and "
+                        "chip strip; OPTIONS drives substitution. Plain: the "
+                        "USER and SYSTEM multiline inputs are used directly."
                     ),
                 ),
             ],
@@ -147,15 +123,10 @@ class NewflowPromptComposer(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, mode, IMAGES=None, IMAGE_LIST=None, OPTIONS="{}"):
+    def execute(cls, mode, IMAGES=None, IMAGE_LIST=None, OPTIONS="{}", USER="", SYSTEM=""):
         # With is_input_list=True, every input arrives as a (length-1) list.
-        # OPTIONS and the DynamicCombo dict both arrive wrapped — unwrap.
-        mode = cls._unwrap(mode, default={})
-        if not isinstance(mode, dict):
-            mode = {}
+        selected = cls._unwrap(mode, default=MODE_TEMPLATED) or MODE_TEMPLATED
         options_raw = cls._unwrap(OPTIONS, default="{}")
-
-        selected = mode.get("mode", MODE_TEMPLATED)
 
         prompt = cls.hidden.prompt or {}
         unique_id = str(cls.hidden.unique_id)
@@ -163,13 +134,13 @@ class NewflowPromptComposer(io.ComfyNode):
         llm_text = cls._read_state_text(node_inputs.get(cls.LLM_WIDGET))
 
         if selected == MODE_PLAIN:
-            user_text = cls._unwrap(mode.get("USER"), default="") or ""
-            system_text = cls._unwrap(mode.get("SYSTEM"), default="") or ""
-            user_out, system_out = user_text, system_text
+            # Plain mode: USER / SYSTEM schema inputs are the source of truth.
+            user_out = cls._unwrap(USER, default="") or ""
+            system_out = cls._unwrap(SYSTEM, default="") or ""
         else:
-            # Templated path — read the rich-editor widget states and
-            # substitute [[Key]] placeholders from the OPTIONS JSON (which
-            # lives at the top level, not nested in the DynamicCombo).
+            # Templated mode: rich-editor widget states (user_prompt_state,
+            # system_prompt_state) drive the output; substitute [[Key]] using
+            # the OPTIONS JSON.
             vars_dict = cls._parse_vars(options_raw)
             user_state = cls._read_state_text(node_inputs.get(cls.USER_WIDGET))
             system_state = cls._read_state_text(node_inputs.get(cls.SYSTEM_WIDGET))

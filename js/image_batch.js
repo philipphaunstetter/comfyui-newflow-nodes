@@ -152,11 +152,17 @@ function migrateLegacyNodeData(nodeData) {
     // up with the new schema's widget order: [mode, garment_1..N, labels].
     while (garments.length < NUM_GARMENT_SLOTS) garments.push("");
 
+    // New widget order (positional, as serialized in workflow JSON):
+    //   garment_1 .. garment_8   (8 Combo upload widgets)
+    //   flatten_batches          (Boolean, default true)
+    //   mode                     (Combo)
+    //   wardrobe_labels          (DOM widget, added by JS — last)
     nodeData.type = NODE_NAME;
     nodeData.comfyClass = NODE_NAME;
     nodeData.widgets_values = [
-        "Wardrobe",
         ...garments,
+        true,
+        "Wardrobe",
         JSON.stringify(labels),
     ];
 }
@@ -208,14 +214,54 @@ app.registerExtension({
             });
 
             // ---- mode-aware visibility -------------------------------------
+            // The schema is flat: image_N / IMAGE_N / garment_N / flatten_batches
+            // all coexist always. The JS hides the irrelevant widgets per mode
+            // (and the IMAGE_N / image_N input sockets too) so users only see
+            // the controls that matter for the selected mode.
 
             const isWardrobe = () =>
                 (node.widgets?.find((w) => w.name === "mode")?.value || "Slots")
                     === "Wardrobe";
 
+            // Schema widgets to gate by mode. Image inputs aren't real
+            // widgets (they're sockets) — we can't hide their sockets, but
+            // we can hide their entry in the node's widget list when present.
+            const garmentWidgets = (node.widgets || []).filter(
+                (w) => /^garment_\d+$/.test(w?.name || ""),
+            );
+            const flattenWidget = node.widgets?.find((w) => w.name === "flatten_batches");
+
+            const stash = (w) => {
+                if (!w || w._newflowOrigComputeSize) return;
+                w._newflowOrigComputeSize = w.computeSize;
+                w._newflowOrigType = w.type;
+            };
+            const hide = (w) => {
+                if (!w) return;
+                w.computeSize = () => [0, -4];
+                w.type = "hidden";
+            };
+            const show = (w) => {
+                if (!w) return;
+                w.computeSize = w._newflowOrigComputeSize;
+                w.type = w._newflowOrigType;
+            };
+            garmentWidgets.forEach(stash);
+            stash(flattenWidget);
+
             const applyVisibility = () => {
-                host.style.display = isWardrobe() ? "" : "none";
-                if (isWardrobe()) refresh();
+                const wardrobe = isWardrobe();
+                // wardrobe_labels panel: only visible in Wardrobe.
+                host.style.display = wardrobe ? "" : "none";
+                if (wardrobe) refresh();
+                // garment_N upload widgets: only visible in Wardrobe.
+                garmentWidgets.forEach((w) => (wardrobe ? show(w) : hide(w)));
+                // flatten_batches: only meaningful in Slots.
+                if (wardrobe) hide(flattenWidget);
+                else show(flattenWidget);
+                if (Array.isArray(node.size)) {
+                    node.setSize?.(node.computeSize?.() || node.size);
+                }
                 node.setDirtyCanvas?.(true, true);
             };
 

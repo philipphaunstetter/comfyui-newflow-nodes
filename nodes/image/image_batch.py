@@ -1,18 +1,25 @@
 """Merged Image Batch node — combines the former NewflowImageBatch and
-NewflowImageArray (Clothing) into one node with a mode toggle.
+NewflowImageArray (Clothing) into one node with a flat schema and a
+simple ``mode`` Combo widget.
 
 - ``Slots`` mode (default): the original ImageBatch behaviour — 8 fixed
-  IMAGE input sockets (``image_1`` .. ``image_8``). Existing saved
-  workflows continue working since the input ids are unchanged.
-- ``Wardrobe`` mode: rebuilt on ``io.Autogrow``. Each garment slot uses
-  ComfyUI's built-in image-upload widget (drag-drop + file picker, same
-  UX as LoadImage). Old ``NewflowImageArray`` workflows auto-migrate via
-  NodeReplace + a small JS ``beforeConfigureGraph`` shim that expands the
-  legacy ``containers`` JSON widget into N positional ``garment_N`` widgets.
+  ``image_N`` IMAGE input sockets. Existing saved workflows continue
+  working since the input ids are unchanged.
+- ``Wardrobe`` mode: 4 ``IMAGE_N`` external sockets plus 8 ``garment_N``
+  Combo upload widgets (drag-drop files directly, the LoadImage pattern).
+  Old ``NewflowImageArray`` workflows auto-migrate via NodeReplace + a
+  small JS ``beforeConfigureGraph`` shim that expands the legacy
+  ``containers`` JSON widget into N positional ``garment_N`` values.
 
 Both modes produce the same outputs: a white-padded ``IMAGE`` batch and an
 ``IMAGE_LIST`` at native resolutions. The padding/stacking logic lives in
 :func:`pad_and_batch` and is shared.
+
+The schema is intentionally flat — no DynamicCombo, no nested options.
+DynamicCombo turned out to be incompatible with String/Image sockets
+that need to be wired from upstream (nested sockets either don't render
+or sit at zero-width). The JS reads the ``mode`` widget value and
+hides/shows the appropriate widget rows.
 """
 
 from __future__ import annotations
@@ -38,11 +45,10 @@ NUM_SLOTS = 8
 # Preserved verbatim so existing Clothing workflows migrate cleanly.
 NUM_WARDROBE_EXTERNAL = 4
 
-# Fixed garment-slot count. We can't use io.Autogrow here: Autogrow forces
-# `force_input=True` on every WidgetInput template (see
-# comfy_api/latest/_io.py:970-971), which strips the upload widget from
-# io.Combo.Input — turning our drag-drop slots into sockets-only. Fixed
-# slots keep the upload widget and the drag-drop UX intact.
+# Fixed garment-slot count. Each garment is an io.Combo.Input with
+# upload=image — mirrors LoadImage's pattern for drag-drop + file picker.
+# (io.Autogrow can't be used here: it forces force_input=True on every
+# WidgetInput template, stripping the upload widget.)
 NUM_WARDROBE_SLOTS = 8
 
 MODE_SLOTS = "Slots"
@@ -52,50 +58,25 @@ MODE_WARDROBE = "Wardrobe"
 class NewflowImageBatch(io.ComfyNode):
     @classmethod
     def define_schema(cls):
-        # External IMAGE sockets carried over from NewflowImageArray. Hoisted
-        # to the top level (above the DynamicCombo) for two reasons:
-        #  1. io.DynamicCombo.Input cannot be the *first* schema input —
-        #     the frontend's dynamicComboWidget wiring fails with "Failed to
-        #     find input socket for mode" when it is. Every working api_node
-        #     in the ComfyUI codebase puts a regular input first.
-        #  2. The old NewflowImageArray had these as top-level sockets, so
-        #     keeping them top-level makes the NodeReplace mapping a clean
-        #     1:1 (IMAGE_N -> IMAGE_N) instead of needing dot-notation.
-        # In Slots mode these are simply ignored — execute() only consumes
-        # them when mode == Wardrobe.
         external_inputs = [
             io.Image.Input(
                 f"IMAGE_{i + 1}",
                 optional=True,
                 tooltip=(
-                    "External image socket. Consumed in Wardrobe mode "
-                    "(prepended to the output in order); ignored in Slots mode."
+                    "Wardrobe-mode external image socket. Prepended to the "
+                    "output in order. Ignored in Slots mode."
                 ),
             )
             for i in range(NUM_WARDROBE_EXTERNAL)
         ]
-        # NOTE: a DynamicCombo.Option whose sub-inputs are all sockets crashes
-        # the frontend's dynamicComboWidget. Each Option needs at least one
-        # widget. `flatten_batches` is the meaningful one here — controls
-        # whether multi-frame inputs get flattened into individual frames
-        # (default True, preserving the original NewflowImageBatch behaviour).
         slot_inputs = [
-            io.Boolean.Input(
-                "flatten_batches",
-                default=True,
-                tooltip=(
-                    "If true, multi-frame inputs are split into individual "
-                    "frames before batching. If false, each input contributes "
-                    "its full batch as one entry (uncommon — leave on)."
-                ),
-            ),
-            *[io.Image.Input(f"image_{i + 1}", optional=True) for i in range(NUM_SLOTS)],
+            io.Image.Input(
+                f"image_{i + 1}",
+                optional=True,
+                tooltip="Slots-mode image socket. Ignored in Wardrobe mode.",
+            )
+            for i in range(NUM_SLOTS)
         ]
-        # Fixed garment slots — N independent io.Combo.Input upload widgets.
-        # Mirrors LoadImage's pattern (options=[] + upload=image triggers
-        # ComfyUI's built-in drag-drop + file picker). Each slot is optional;
-        # empty slots are skipped at execute time. User-editable labels live
-        # in a separate wardrobe_labels DOM widget added by image_batch.js.
         garment_inputs = [
             io.Combo.Input(
                 f"garment_{i + 1}",
@@ -104,8 +85,8 @@ class NewflowImageBatch(io.ComfyNode):
                 upload=io.UploadType.image,
                 image_folder=io.FolderType.input,
                 tooltip=(
-                    "Drag-drop or pick an image. Stored in ComfyUI's input/ "
-                    "folder. Leave empty to skip."
+                    "Wardrobe-mode garment slot. Drag-drop or pick an image; "
+                    "stored in ComfyUI's input/ folder. Ignored in Slots mode."
                 ),
             )
             for i in range(NUM_WARDROBE_SLOTS)
@@ -122,22 +103,29 @@ class NewflowImageBatch(io.ComfyNode):
                 "aspect ratio.\n\n"
                 "Slots mode: 8 optional image_N input sockets for chaining "
                 "upstream image producers.\n\n"
-                "Wardrobe mode: the IMAGE_N sockets are consumed (prepended "
-                "in order) and an Autogrow list of per-slot garments lets "
-                "you drag-drop files directly into each slot. Replaces the "
+                "Wardrobe mode: 4 IMAGE_N external sockets plus 8 garment "
+                "upload widgets (drag-drop files directly). Replaces the "
                 "former Newflow Clothing / Image Array node."
             ),
             inputs=[
                 *external_inputs,
-                io.DynamicCombo.Input(
-                    "mode",
-                    options=[
-                        io.DynamicCombo.Option(MODE_SLOTS, slot_inputs),
-                        io.DynamicCombo.Option(MODE_WARDROBE, garment_inputs),
-                    ],
+                *slot_inputs,
+                *garment_inputs,
+                io.Boolean.Input(
+                    "flatten_batches",
+                    default=True,
                     tooltip=(
-                        "Slots: 8 fixed IMAGE sockets. "
-                        "Wardrobe: per-slot upload widgets (IMAGE_N sockets above are also used)."
+                        "Slots mode: if true, multi-frame inputs are split "
+                        "into individual frames before batching."
+                    ),
+                ),
+                io.Combo.Input(
+                    "mode",
+                    options=[MODE_SLOTS, MODE_WARDROBE],
+                    default=MODE_SLOTS,
+                    tooltip=(
+                        "Slots: use the image_N sockets. "
+                        "Wardrobe: use IMAGE_N + garment_N (upload widgets)."
                     ),
                 ),
             ],
@@ -149,18 +137,12 @@ class NewflowImageBatch(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, mode, **kwargs):
-        # Top-level IMAGE_N sockets arrive as direct kwargs (they live above
-        # the DynamicCombo). The DynamicCombo dict carries Slot/Wardrobe-
-        # specific sub-inputs (image_1..image_8 or garments).
-        if not isinstance(mode, dict):
-            mode = {}
-        selected = mode.get("mode", MODE_SLOTS)
-
+    def execute(cls, mode=MODE_SLOTS, flatten_batches=True, **kwargs):
+        selected = mode if isinstance(mode, str) else MODE_SLOTS
         if selected == MODE_WARDROBE:
-            tensors = cls._collect_wardrobe(mode, kwargs)
+            tensors = cls._collect_wardrobe(kwargs)
         else:
-            tensors = cls._collect_slots(mode)
+            tensors = cls._collect_slots(kwargs, flatten_batches)
 
         if not tensors:
             # Nothing wired in: emit a 1×64×64 white placeholder so downstream
@@ -174,16 +156,11 @@ class NewflowImageBatch(io.ComfyNode):
     # ---- mode-specific tensor collection --------------------------------
 
     @staticmethod
-    def _collect_slots(mode: dict) -> list[torch.Tensor]:
-        """Slots mode — gather image_1..image_N in slot order. When
-        ``flatten_batches`` is true (the default, matching the old
-        NewflowImageBatch behaviour) multi-frame inputs are split into
-        individual frames before batching; when false each input contributes
-        its whole batch as a single entry."""
-        flatten = mode.get("flatten_batches", True)
+    def _collect_slots(kwargs: dict, flatten: bool) -> list[torch.Tensor]:
+        """Slots mode — gather image_1..image_N in slot order."""
         flat: list[torch.Tensor] = []
         for i in range(NUM_SLOTS):
-            tensor = mode.get(f"image_{i + 1}")
+            tensor = kwargs.get(f"image_{i + 1}")
             if tensor is None:
                 continue
             t = tensor
@@ -197,16 +174,12 @@ class NewflowImageBatch(io.ComfyNode):
         return flat
 
     @classmethod
-    def _collect_wardrobe(cls, mode: dict, top_level: dict) -> list[torch.Tensor]:
+    def _collect_wardrobe(cls, kwargs: dict) -> list[torch.Tensor]:
         """Wardrobe mode — externally wired IMAGE_N (first frame only) followed
         by each garment_N upload slot loaded from ComfyUI's input/ folder."""
         tensors: list[torch.Tensor] = []
-
-        # External sockets first, in numeric order. Matches the old
-        # NewflowImageArray semantics where IMAGE_N prepended to the output.
-        # IMAGE_N lives at the top level (above the DynamicCombo).
         for i in range(NUM_WARDROBE_EXTERNAL):
-            slot = top_level.get(f"IMAGE_{i + 1}")
+            slot = kwargs.get(f"IMAGE_{i + 1}")
             if slot is None:
                 continue
             t = slot
@@ -214,14 +187,11 @@ class NewflowImageBatch(io.ComfyNode):
                 t = t.unsqueeze(0)
             if t.shape[0] >= 1:
                 tensors.append(t[0:1])
-
-        # Garment upload slots — each value is a filename string under input/.
         for i in range(NUM_WARDROBE_SLOTS):
-            filename = mode.get(f"garment_{i + 1}")
+            filename = kwargs.get(f"garment_{i + 1}")
             tensor = cls._load_input_image(filename)
             if tensor is not None:
                 tensors.append(tensor)
-
         return tensors
 
     @staticmethod

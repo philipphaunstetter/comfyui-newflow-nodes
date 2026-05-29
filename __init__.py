@@ -20,17 +20,17 @@ class NewflowExtension(ComfyExtension):
         api = ComfyAPI()
 
         # Prompt Composer (Simple) → Prompt Composer (Plain mode).
-        # Old node had USER, SYSTEM as multiline string widgets and
-        # llm_output_state as a DOM widget. The wired image sockets keep
-        # the same ids (IMAGES, IMAGE_LIST) and reconnect automatically.
+        # All inputs are top-level on the merged node — clean 1:1 mapping.
+        # mode is set to Plain so the JS hides the rich editors and shows
+        # the schema USER/SYSTEM multilines (which match the old layout).
         await api.node_replacement.register(io.NodeReplace(
             new_node_id="NewflowPromptComposer",
             old_node_id="NewflowPromptComposerSimple",
             old_widget_ids=["USER", "SYSTEM", "llm_output_state"],
             input_mapping=[
                 {"new_id": "mode", "set_value": "Plain"},
-                {"new_id": "mode.USER", "old_id": "USER"},
-                {"new_id": "mode.SYSTEM", "old_id": "SYSTEM"},
+                {"new_id": "USER", "old_id": "USER"},
+                {"new_id": "SYSTEM", "old_id": "SYSTEM"},
             ],
             output_mapping=[
                 {"new_idx": 0, "old_idx": 0},  # USER

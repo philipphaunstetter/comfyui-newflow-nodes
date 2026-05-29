@@ -1693,19 +1693,58 @@ app.registerExtension({
                 }),
             });
 
-            // Mode visibility: in Plain mode the rich USER/SYSTEM editors are
-            // hidden — the schema-level USER and SYSTEM multiline widgets
-            // (rendered automatically by the DynamicCombo) take over. The LLM
-            // output editor stays in both modes.
+            // Mode visibility: a plain io.Combo widget named "mode" drives
+            // which editor block is visible.
+            //   Templated → rich USER/SYSTEM editors (DOM); the schema-level
+            //               USER and SYSTEM multiline widgets are hidden.
+            //   Plain     → schema USER and SYSTEM multiline widgets show;
+            //               the rich DOM editors collapse to 0 height.
+            // The LLM output editor stays in both modes.
             const isTemplated = () =>
                 (node.widgets?.find((w) => w.name === "mode")?.value || "Templated")
                     === "Templated";
 
+            // Schema widgets (rendered by ComfyUI) for USER/SYSTEM.
+            const schemaUserWidget = node.widgets?.find((w) => w.name === "USER");
+            const schemaSystemWidget = node.widgets?.find((w) => w.name === "SYSTEM");
+
+            // Track original computeSize / type so we can restore in Templated mode.
+            const stashWidgetSize = (w) => {
+                if (!w || w._newflowOrigComputeSize) return;
+                w._newflowOrigComputeSize = w.computeSize;
+                w._newflowOrigType = w.type;
+            };
+            stashWidgetSize(schemaUserWidget);
+            stashWidgetSize(schemaSystemWidget);
+
+            const hideSchemaWidget = (w) => {
+                if (!w) return;
+                w.computeSize = () => [0, -4];
+                w.type = "hidden";
+            };
+            const showSchemaWidget = (w) => {
+                if (!w) return;
+                w.computeSize = w._newflowOrigComputeSize;
+                w.type = w._newflowOrigType;
+            };
+
             const applyModeVisibility = () => {
                 const templated = isTemplated();
+
+                // Rich DOM editors.
                 userHost.style.display = templated ? "" : "none";
                 systemHost.style.display = templated ? "" : "none";
                 chipStrip.style.display = templated ? "" : "none";
+
+                // Schema USER/SYSTEM multilines — opposite visibility.
+                if (templated) {
+                    hideSchemaWidget(schemaUserWidget);
+                    hideSchemaWidget(schemaSystemWidget);
+                } else {
+                    showSchemaWidget(schemaUserWidget);
+                    showSchemaWidget(schemaSystemWidget);
+                }
+
                 // Force a re-layout so the node height adjusts.
                 if (Array.isArray(node.size)) {
                     node.setSize?.(node.computeSize?.() || node.size);
@@ -1713,16 +1752,12 @@ app.registerExtension({
                 node.setDirtyCanvas?.(true, true);
             };
 
-            // Each widget gets a fixed height in Templated mode; 0 height in
-            // Plain mode (hidden). Fully independent of node.size to avoid
-            // feedback loops.
+            // DOM editor heights: full height in Templated mode, 0 in Plain.
             userWidget.computeSize = (w) => [w, isTemplated() ? FIXED_USER_WIDGET_H : 0];
             systemWidget.computeSize = (w) => [w, isTemplated() ? FIXED_SYSTEM_WIDGET_H : 0];
             llmWidget.computeSize = (w) => [w, FIXED_LLM_WIDGET_H];
 
-            // Watch the mode combo and re-apply on every switch. We chain
-            // onto whatever LiteGraph already wired (default Combo callback
-            // updates node state).
+            // Watch the mode combo and re-apply on every switch.
             const modeWidget = node.widgets?.find((w) => w.name === "mode");
             if (modeWidget) {
                 const origModeCb = modeWidget.callback;
@@ -1731,17 +1766,6 @@ app.registerExtension({
                     applyModeVisibility();
                     return r;
                 };
-            }
-
-            // Hide the schema-level display_mode widget. It exists purely to
-            // bypass the "DynamicCombo option needs at least one widget"
-            // crash; users interact with the DOM-level dropdown below the
-            // LLM editor (displaySel) instead. computeSize 0 collapses the
-            // row so there's no visual duplication.
-            const schemaDisplayModeWidget = node.widgets?.find((w) => w.name === "display_mode");
-            if (schemaDisplayModeWidget) {
-                schemaDisplayModeWidget.computeSize = () => [0, -4];
-                schemaDisplayModeWidget.type = "hidden";
             }
 
             applyModeVisibility();
