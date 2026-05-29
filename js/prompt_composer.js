@@ -1638,6 +1638,23 @@ app.registerExtension({
 
             llmHost.append(llmBlock.dom, bottomRow);
 
+            // USER/SYSTEM each have an optional upstream STRING socket. When
+            // one is wired, the backend uses the upstream value instead of the
+            // editor — so lock + dim the editor to make that override obvious.
+            const isInputConnected = (name) => {
+                const inp = node.inputs?.find((i) => i.name === name);
+                return inp != null && inp.link != null;
+            };
+            const applyEditorOverride = (editor, wired) => {
+                if (!editor) return;
+                editor.contentEditable = wired ? "false" : "true";
+                editor.style.opacity = wired ? "0.45" : "";
+                editor.style.pointerEvents = wired ? "none" : "";
+                editor.title = wired
+                    ? "Driven by the wired input — disconnect it to edit here."
+                    : "";
+            };
+
             const refreshAll = () => {
                 ctx.keys = getAvailableKeys(node);
                 ctx.values = getCurrentValues(node);
@@ -1649,6 +1666,8 @@ app.registerExtension({
                 });
                 userBlock.refresh(ctx.keys, ctx.values, ctx.displayMode);
                 systemBlock.refresh(ctx.keys, ctx.values, ctx.displayMode);
+                applyEditorOverride(userBlock.editor, isInputConnected("USER"));
+                applyEditorOverride(systemBlock.editor, isInputConnected("SYSTEM"));
                 llmBlock.refreshImageBadge?.();
             };
 

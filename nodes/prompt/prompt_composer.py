@@ -42,9 +42,11 @@ class NewflowPromptComposer(io.ComfyNode):
                 "placeholders substitute from the OPTIONS JSON input (e.g. from "
                 "Newflow Dynamic Dropdowns); missing keys render as "
                 "[MISSING: Key]. In Plain mode, the prompts are emitted "
-                "verbatim and the OPTIONS socket is hidden. Both modes share "
-                "the LLM Output editor (streamed from Ollama), the image "
-                "inputs, and the settings dialog. Accepts images via IMAGES "
+                "verbatim and the OPTIONS socket is hidden. The optional USER "
+                "and SYSTEM input sockets accept an upstream STRING that "
+                "overrides the matching in-node editor when connected. Both "
+                "modes share the LLM Output editor (streamed from Ollama), the "
+                "image inputs, and the settings dialog. Accepts images via IMAGES "
                 "(padded IMAGE batch) or IMAGE_LIST (native-resolution list "
                 "from Newflow Image Batch) — vision LLMs see each image at "
                 "full quality with no padding."
@@ -69,6 +71,27 @@ class NewflowPromptComposer(io.ComfyNode):
                         "Optional IMAGE_LIST input — native-resolution list "
                         "from Newflow Image Batch. Each image keeps its "
                         "native dimensions for vision LLMs."
+                    ),
+                ),
+                io.String.Input(
+                    "USER",
+                    optional=True,
+                    force_input=True,
+                    tooltip=(
+                        "Optional upstream STRING that overrides the in-node "
+                        "USER editor. Leave unconnected to type/template in the "
+                        "editor. In Templated mode, [[Key]] tokens in the wired "
+                        "string are still substituted from OPTIONS."
+                    ),
+                ),
+                io.String.Input(
+                    "SYSTEM",
+                    optional=True,
+                    force_input=True,
+                    tooltip=(
+                        "Optional upstream STRING that overrides the in-node "
+                        "SYSTEM editor. Leave unconnected to type/template in "
+                        "the editor."
                     ),
                 ),
                 io.String.Input(
@@ -103,30 +126,35 @@ class NewflowPromptComposer(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, mode, IMAGES=None, IMAGE_LIST=None, OPTIONS="{}"):
+    def execute(cls, mode, IMAGES=None, IMAGE_LIST=None, OPTIONS="{}", USER=None, SYSTEM=None):
         # With is_input_list=True, every input arrives as a (length-1) list.
         selected = cls._unwrap(mode, default=MODE_TEMPLATED) or MODE_TEMPLATED
         options_raw = cls._unwrap(OPTIONS, default="{}")
+        user_wire = cls._unwrap(USER, default=None)
+        system_wire = cls._unwrap(SYSTEM, default=None)
 
         prompt = cls.hidden.prompt or {}
         unique_id = str(cls.hidden.unique_id)
         node_inputs = prompt.get(unique_id, {}).get("inputs", {})
         llm_text = cls._read_state_text(node_inputs.get(cls.LLM_WIDGET))
 
-        # USER/SYSTEM come from the same rich-editor widget states
+        # USER/SYSTEM default to the same rich-editor widget states
         # (user_prompt_state, system_prompt_state) in BOTH modes — the editors
-        # are identical regardless of mode. Mode only decides whether [[Key]]
-        # placeholders are substituted from the OPTIONS JSON.
-        user_state = cls._read_state_text(node_inputs.get(cls.USER_WIDGET))
-        system_state = cls._read_state_text(node_inputs.get(cls.SYSTEM_WIDGET))
+        # are identical regardless of mode. A wired upstream STRING on the
+        # USER/SYSTEM socket overrides the corresponding editor. Mode only
+        # decides whether [[Key]] placeholders are substituted from OPTIONS.
+        editor_user = cls._read_state_text(node_inputs.get(cls.USER_WIDGET))
+        editor_system = cls._read_state_text(node_inputs.get(cls.SYSTEM_WIDGET))
+        user_src = user_wire if isinstance(user_wire, str) else editor_user
+        system_src = system_wire if isinstance(system_wire, str) else editor_system
 
         if selected == MODE_PLAIN:
-            user_out = user_state
-            system_out = system_state
+            user_out = user_src
+            system_out = system_src
         else:
             vars_dict = cls._parse_vars(options_raw)
-            user_out = cls._substitute(user_state, vars_dict)
-            system_out = cls._substitute(system_state, vars_dict)
+            user_out = cls._substitute(user_src, vars_dict)
+            system_out = cls._substitute(system_src, vars_dict)
 
         # Cache images so JS-driven Generate calls include them in
         # /newflow/llm/generate. Shared across both modes.
