@@ -656,6 +656,16 @@ app.registerExtension({
             };
 
             applyLayout();
+            // On a fresh add ComfyUI instantiates all schema-declared IMAGE_N
+            // sockets; applyLayout collapses the empty trailing ones down to a
+            // single IMAGE_1. ComfyUI can re-add them during its own input
+            // reconciliation right after this returns, so normalise once more
+            // on the next frame (mirrors the onConfigure path above).
+            requestAnimationFrame(() => {
+                if (node.graph) {
+                    try { applyLayout(); } catch { /* node gone */ }
+                }
+            });
         };
     },
 });
