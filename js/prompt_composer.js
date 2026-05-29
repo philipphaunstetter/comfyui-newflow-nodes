@@ -504,7 +504,12 @@ function scanAndConvert(editor, knownKeys, displayMode, valuesMap) {
 // ---------------------------------------------------------------------------
 
 function findVariablesSlot(node) {
-    return node.inputs?.findIndex((i) => i.name === "OPTIONS") ?? -1;
+    // The OPTIONS input is nested inside the DynamicCombo "mode" Templated
+    // option, so its socket is named "mode.OPTIONS" in the frontend (the
+    // display label is still just "OPTIONS"). Match both for back-compat.
+    return node.inputs?.findIndex(
+        (i) => i.name === "mode.OPTIONS" || i.name === "OPTIONS",
+    ) ?? -1;
 }
 
 function readUpstreamRows(node) {
