@@ -78,11 +78,11 @@ class NewflowPromptComposer(io.ComfyNode):
                     "OPTIONS",
                     default="{}",
                     optional=True,
+                    force_input=True,
                     tooltip=(
                         "JSON of {label: value} from Newflow Dynamic Dropdowns "
                         "or any STRING source. Drives [[Key]] substitution in "
-                        "Templated mode. Ignored in Plain mode. Wire upstream "
-                        "or paste JSON directly."
+                        "Templated mode. Ignored in Plain mode."
                     ),
                 ),
                 io.DynamicCombo.Input(
