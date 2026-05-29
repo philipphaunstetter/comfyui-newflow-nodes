@@ -49,13 +49,16 @@ class NewflowPromptComposer(io.ComfyNode):
                 "at full quality with no padding."
             ),
             inputs=[
-                # NOTE: io.DynamicCombo.Input cannot be the *first* schema
-                # input — the frontend's addInputs/dynamicComboWidget chain
-                # fails with "Failed to find input socket for mode" if it is.
-                # All working ComfyUI api_node examples (anthropic, openrouter,
-                # rodin, elevenlabs, bfl, …) put a regular input (String or
-                # Autogrow) before any DynamicCombo. We honour the same rule
-                # by listing the image inputs first.
+                # Top-level data inputs. They're always visible (in both modes)
+                # but only consumed by the matching branch in execute() — same
+                # pattern as ImageBatch's IMAGE_N sockets being shared across
+                # Slots/Wardrobe modes. We deliberately do NOT nest these
+                # inside the DynamicCombo because:
+                #  (1) io.DynamicCombo.Input cannot be the *first* schema input
+                #      (the frontend addInputs chain crashes), and
+                #  (2) nested String inputs don't reliably render an input
+                #      socket — wires drawn to a nested OPTIONS land in dead
+                #      space and the JS upstream-detection misses them.
                 io.Image.Input(
                     "IMAGES",
                     optional=True,
@@ -71,30 +74,38 @@ class NewflowPromptComposer(io.ComfyNode):
                         "them at full quality."
                     ),
                 ),
+                io.String.Input(
+                    "OPTIONS",
+                    default="{}",
+                    optional=True,
+                    tooltip=(
+                        "JSON of {label: value} from Newflow Dynamic Dropdowns "
+                        "or any STRING source. Drives [[Key]] substitution in "
+                        "Templated mode. Ignored in Plain mode. Wire upstream "
+                        "or paste JSON directly."
+                    ),
+                ),
                 io.DynamicCombo.Input(
                     "mode",
                     options=[
                         io.DynamicCombo.Option(
                             MODE_TEMPLATED,
                             [
-                                # NOTE: no force_input here. A DynamicCombo.Option
-                                # whose sub-inputs are *all* sockets crashes the
-                                # frontend's dynamicComboWidget with "Failed to
-                                # find input socket for mode" — the expansion
-                                # path requires each Option to add at least one
-                                # widget. By dropping force_input we get both a
-                                # widget (a small text box, default "{}") AND a
-                                # socket users can wire upstream into.
-                                io.String.Input(
-                                    "OPTIONS",
-                                    default="{}",
-                                    optional=True,
+                                # Templated mode needs at least one widget in
+                                # its sub-inputs to bypass the frontend's
+                                # "all-sockets" crash. display_mode controls
+                                # how variable pills render in the rich
+                                # editors — promoted here from the old
+                                # frontend-only dropdown.
+                                io.Combo.Input(
+                                    "display_mode",
+                                    options=["source", "sourceValue", "valueOnly"],
+                                    default="source",
                                     tooltip=(
-                                        "JSON of {label: value} from Newflow "
-                                        "Dynamic Dropdowns or any STRING source. "
-                                        "Drives [[Key]] substitution in the "
-                                        "user and system prompts. Wire upstream "
-                                        "or paste JSON directly."
+                                        "Pill rendering in the rich editors. "
+                                        "'source' shows just the key, 'sourceValue' "
+                                        "shows 'Key: value', 'valueOnly' shows "
+                                        "only the value (or '[MISSING]')."
                                     ),
                                 ),
                             ],
@@ -120,9 +131,9 @@ class NewflowPromptComposer(io.ComfyNode):
                         ),
                     ],
                     tooltip=(
-                        "Templated: [[Key]] pills + slash-menu, OPTIONS JSON "
-                        "drives substitution. Plain: direct USER and SYSTEM "
-                        "text fields, no substitution."
+                        "Templated: rich editors with [[Key]] pills, OPTIONS "
+                        "JSON drives substitution. Plain: direct USER and "
+                        "SYSTEM text fields, no substitution."
                     ),
                 ),
             ],
@@ -136,12 +147,13 @@ class NewflowPromptComposer(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, mode, IMAGES=None, IMAGE_LIST=None):
+    def execute(cls, mode, IMAGES=None, IMAGE_LIST=None, OPTIONS="{}"):
         # With is_input_list=True, every input arrives as a (length-1) list.
-        # The DynamicCombo dict is itself a singleton list — unwrap it once.
+        # OPTIONS and the DynamicCombo dict both arrive wrapped — unwrap.
         mode = cls._unwrap(mode, default={})
         if not isinstance(mode, dict):
             mode = {}
+        options_raw = cls._unwrap(OPTIONS, default="{}")
 
         selected = mode.get("mode", MODE_TEMPLATED)
 
@@ -156,8 +168,8 @@ class NewflowPromptComposer(io.ComfyNode):
             user_out, system_out = user_text, system_text
         else:
             # Templated path — read the rich-editor widget states and
-            # substitute [[Key]] placeholders from the OPTIONS JSON.
-            options_raw = cls._unwrap(mode.get("OPTIONS"), default="{}")
+            # substitute [[Key]] placeholders from the OPTIONS JSON (which
+            # lives at the top level, not nested in the DynamicCombo).
             vars_dict = cls._parse_vars(options_raw)
             user_state = cls._read_state_text(node_inputs.get(cls.USER_WIDGET))
             system_state = cls._read_state_text(node_inputs.get(cls.SYSTEM_WIDGET))

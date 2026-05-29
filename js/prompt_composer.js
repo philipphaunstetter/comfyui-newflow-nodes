@@ -504,12 +504,7 @@ function scanAndConvert(editor, knownKeys, displayMode, valuesMap) {
 // ---------------------------------------------------------------------------
 
 function findVariablesSlot(node) {
-    // The OPTIONS input is nested inside the DynamicCombo "mode" Templated
-    // option, so its socket is named "mode.OPTIONS" in the frontend (the
-    // display label is still just "OPTIONS"). Match both for back-compat.
-    return node.inputs?.findIndex(
-        (i) => i.name === "mode.OPTIONS" || i.name === "OPTIONS",
-    ) ?? -1;
+    return node.inputs?.findIndex((i) => i.name === "OPTIONS") ?? -1;
 }
 
 function readUpstreamRows(node) {
@@ -1736,6 +1731,17 @@ app.registerExtension({
                     applyModeVisibility();
                     return r;
                 };
+            }
+
+            // Hide the schema-level display_mode widget. It exists purely to
+            // bypass the "DynamicCombo option needs at least one widget"
+            // crash; users interact with the DOM-level dropdown below the
+            // LLM editor (displaySel) instead. computeSize 0 collapses the
+            // row so there's no visual duplication.
+            const schemaDisplayModeWidget = node.widgets?.find((w) => w.name === "display_mode");
+            if (schemaDisplayModeWidget) {
+                schemaDisplayModeWidget.computeSize = () => [0, -4];
+                schemaDisplayModeWidget.type = "hidden";
             }
 
             applyModeVisibility();
