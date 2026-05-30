@@ -1,7 +1,7 @@
 // Frontend for the NewflowImageBatch node — a single Wardrobe node.
 //
 // The node always shows:
-//   - up to 4 IMAGE_N external sockets. They grow one at a time (autogrow):
+//   - up to 16 IMAGE_N external sockets. They grow one at a time (autogrow):
 //     IMAGE_1 shows first, IMAGE_2 appears once IMAGE_1 is connected, …
 //   - the container grid: labeled cards with directly-uploaded images
 //     (drag-drop / file picker), browse arrows, include toggle, remove,
@@ -28,7 +28,7 @@ const MIN_WIDTH = 380;
 
 // External IMAGE_N autogrow config (must match NUM_EXTERNAL in image_batch.py).
 const EXTERNAL_PREFIX = "IMAGE_";
-const EXTERNAL_MAX = 4;
+const EXTERNAL_MAX = 16;
 
 const INPUT_KIND = window.LiteGraph?.INPUT ?? 1;
 

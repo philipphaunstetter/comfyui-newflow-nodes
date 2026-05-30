@@ -90,8 +90,8 @@ from [js/prompt_composer.js](js/prompt_composer.js) and reused by
 two-mode Slots/Wardrobe design was dropped). It combines two image sources into
 one batch:
 
-- up to four `IMAGE_N` external sockets (autogrow: `IMAGE_1` shows first,
-  `IMAGE_2` appears once `IMAGE_1` is wired, … capped at 4) for upstream image
+- up to sixteen `IMAGE_N` external sockets (autogrow: `IMAGE_1` shows first,
+  `IMAGE_2` appears once `IMAGE_1` is wired, … capped at 16) for upstream image
   producers, prepended to the output in order;
 - an arbitrary number of labeled **containers** with directly-uploaded images
   (drag-drop / file picker, per-card browsing, include toggle, remove,

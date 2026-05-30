@@ -2,9 +2,9 @@
 
 The node combines images from two sources into one batch:
 
-- up to four ``IMAGE_N`` external sockets for upstream image producers. They
+- up to sixteen ``IMAGE_N`` external sockets for upstream image producers. They
   grow one at a time (autogrow): ``IMAGE_1`` shows first, ``IMAGE_2`` appears
-  once ``IMAGE_1`` is connected, and so on (capped at 4).
+  once ``IMAGE_1`` is connected, and so on (capped at 16).
 - an arbitrary number of labeled *containers* with directly-uploaded images
   (drag-drop / file picker), per-card image browsing, an include toggle,
   remove and drag-reorder, plus an "+ Add container" button. The container
@@ -37,7 +37,8 @@ from ._shared import pad_and_batch
 
 # External IMAGE_N sockets. The frontend reveals them progressively
 # (IMAGE_1, then IMAGE_2 once IMAGE_1 is connected, …).
-NUM_EXTERNAL = 4
+# Keep in sync with EXTERNAL_MAX in js/image_batch.js.
+NUM_EXTERNAL = 16
 
 
 class NewflowImageBatch(io.ComfyNode):
