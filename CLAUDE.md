@@ -100,8 +100,21 @@ one batch:
   schema input.
 
 Outputs: `IMAGE` (white-padded batch, sampler/preview compatible) and
-`IMAGE_LIST` (native resolutions, for vision LLMs). The pad/stack logic lives in
-`pad_and_batch` ([nodes/image/_shared.py](nodes/image/_shared.py)).
+`IMAGE_LIST` (native resolutions, for vision LLMs), plus per-container
+`IMAGE1`, `IMAGE2`, … (no underscore — distinct from the `IMAGE_N` *inputs*)
+carrying each container's selected image on its own. The schema declares
+`MAX_CONTAINER_OUTPUTS` (32) of them and `execute` always returns all 34
+values; the JS reveals exactly as many `IMAGE{n}` sockets as there are
+containers (`syncContainerOutputs`, the output-side analogue of the `IMAGE_N`
+input autogrow — tail-only add/remove keeps link indices stable). A
+container's `IMAGE{n}` is mapped **by position regardless of its include box**
+(so toggling include never shifts the other sockets) and emits an **empty
+0-image batch** (`_empty_image()`) when that container is excluded, has no
+image, or the slot is beyond the current container count. The `include` box
+still gates only the aggregate `IMAGE`/`IMAGE_LIST`. The pad/stack logic lives
+in `pad_and_batch` ([nodes/image/_shared.py](nodes/image/_shared.py)).
+`NUM_EXTERNAL`/`MAX_CONTAINER_OUTPUTS` (Python) mirror
+`EXTERNAL_MAX`/`MAX_CONTAINER_OUTPUTS` (JS).
 
 Old `NewflowImageArray` (Clothing) workflows auto-migrate via `io.NodeReplace`
 (registered in [__init__.py](__init__.py): plain rename + 1:1 `IMAGE_N`

@@ -30,6 +30,14 @@ const MIN_WIDTH = 380;
 const EXTERNAL_PREFIX = "IMAGE_";
 const EXTERNAL_MAX = 16;
 
+// Per-container single-image outputs: IMAGE1, IMAGE2, … (no underscore, so
+// they never collide with the IMAGE_N *inputs* or the IMAGE / IMAGE_LIST
+// outputs). The schema declares MAX_CONTAINER_OUTPUTS of them; the frontend
+// reveals exactly as many as there are containers. Must match
+// MAX_CONTAINER_OUTPUTS in image_batch.py.
+const OUTPUT_RE = /^IMAGE(\d+)$/;
+const MAX_CONTAINER_OUTPUTS = 32;
+
 const INPUT_KIND = window.LiteGraph?.INPUT ?? 1;
 
 const css = document.createElement("link");
@@ -457,6 +465,39 @@ function growPrefix(node, prefix, max) {
     }
 }
 
+// Per-container IMAGE{n} outputs (named IMAGE1, IMAGE2, …), sorted by number.
+// Excludes the fixed IMAGE / IMAGE_LIST outputs (neither matches OUTPUT_RE).
+function containerOutputs(node) {
+    const out = [];
+    (node.outputs || []).forEach((o, idx) => {
+        const m = o?.name?.match(OUTPUT_RE);
+        if (m) out.push({ idx, n: parseInt(m[1], 10) });
+    });
+    out.sort((a, b) => a.n - b.n);
+    return out;
+}
+
+// Reveal exactly `count` per-container outputs (IMAGE1..IMAGE{count}), capped.
+// Only ever adds/removes at the tail, so the indices of in-use sockets — and
+// therefore saved links — never shift. Backend always returns all
+// MAX_CONTAINER_OUTPUTS values, so trimmed sockets are purely cosmetic.
+function syncContainerOutputs(node, count) {
+    const desired = Math.max(0, Math.min(count | 0, MAX_CONTAINER_OUTPUTS));
+
+    let guard = 0;
+    while (guard++ < 256) {
+        const list = containerOutputs(node);
+        if (list.length <= desired) break;
+        node.removeOutput(list[list.length - 1].idx);
+    }
+    guard = 0;
+    while (guard++ < 256) {
+        const list = containerOutputs(node);
+        if (list.length >= desired) break;
+        node.addOutput(`IMAGE${list.length + 1}`, "IMAGE");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Migration — reshape any saved node into the single `[containers]` widget.
 // ---------------------------------------------------------------------------
@@ -593,6 +634,7 @@ app.registerExtension({
                 persist?.markDirty();
                 if (!persistOnly) {
                     renderContainers(root, containers, onChange);
+                    syncContainerOutputs(node, containers.length);
                     node.setDirtyCanvas(true, true);
                 }
             };
@@ -603,6 +645,7 @@ app.registerExtension({
                 setValue: (v) => {
                     containers = deserialize(v);
                     renderContainers(root, containers, onChange);
+                    syncContainerOutputs(node, containers.length);
                     node.setDirtyCanvas(true, true);
                 },
             });
@@ -618,6 +661,7 @@ app.registerExtension({
                 setState: ({ containers: c }) => {
                     containers = Array.isArray(c) ? c : [];
                     renderContainers(root, containers, onChange);
+                    syncContainerOutputs(node, containers.length);
                     node.setDirtyCanvas(true, true);
                 },
                 defaultState: () => ({ containers: [] }),
@@ -629,6 +673,7 @@ app.registerExtension({
 
             const applyLayout = () => {
                 growPrefix(node, EXTERNAL_PREFIX, EXTERNAL_MAX);
+                syncContainerOutputs(node, containers.length);
                 renderContainers(root, containers, onChange);
                 node.setSize?.(node.computeSize?.() || node.size);
                 node.setDirtyCanvas?.(true, true);
