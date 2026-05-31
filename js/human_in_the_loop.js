@@ -303,12 +303,29 @@ function renderReasonsEditor(root, ctx) {
                 input.blur();
             }
         });
-        input.addEventListener("change", () => {
+        // Live rename — fires on every keystroke. We deliberately do NOT
+        // call ctx.renderAll() here: that would replace this input element
+        // and the user would lose focus mid-typing. Instead we update only
+        // the things that need it: the widget value (so the next queue
+        // picks it up), the socket display (so the user sees the rename
+        // land on the graph immediately), and the card grid (so per-card
+        // chips/buttons referencing this reason re-read the new label).
+        input.addEventListener("input", () => {
+            // Strip newlines defensively for paste-safety, but don't trim —
+            // trimming live would eat spaces as the user types.
+            const next = input.value.replace(/[\r\n]/g, " ");
+            if (next === reason.label) return;
+            reason.label = next;
+            ctx.liveRenameUpdate();
+        });
+        // On blur, finalize: trim trailing whitespace and reflect it back
+        // into the input so the user sees the canonical value.
+        input.addEventListener("blur", () => {
             const next = input.value.replace(/[\r\n]/g, " ").trim();
             if (next === reason.label) return;
             reason.label = next;
-            ctx.onReasonsChanged();
-            ctx.renderAll(); // refresh chip labels + card buttons
+            input.value = next;
+            ctx.liveRenameUpdate();
         });
         row.appendChild(input);
 
@@ -1029,6 +1046,15 @@ function installHitlNode(node) {
         syncRejectedOutputs(node, reasons);
     };
 
+    // Live in-place update for label edits (input/blur events) — updates
+    // sockets and any visible card chips without re-rendering the editor
+    // (which would replace the focused input element and lose the cursor).
+    const liveRenameUpdate = () => {
+        persistReasonsToWidget();
+        syncRejectedOutputs(node, reasons);
+        if (awaiting) renderCardGrid(gridHost, ctx);
+    };
+
     const submit = async () => {
         if (!awaiting || submitState === "submitting") return;
         const counts = countDecisions(ctx);
@@ -1096,6 +1122,7 @@ function installHitlNode(node) {
         addReason,
         removeReasonAt,
         onReasonsChanged,
+        liveRenameUpdate,
         renderAll: () => renderAll(),
     };
 
