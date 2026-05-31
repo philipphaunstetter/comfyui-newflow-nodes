@@ -197,6 +197,19 @@ function migrateHitlNode(node, links) {
 // Output socket sync
 // =========================================================================
 
+// Write the user's label to every display field a LiteGraph / ComfyUI
+// renderer might read. `name` is the canonical slot name; `localized_name`
+// is the i18n override ComfyUI sets from the schema (and which wins over
+// `name` at render time, so we MUST overwrite it or schema-declared sockets
+// keep showing their original "REJECTED_N" labels); `label` is the newer
+// LiteGraph display override.
+function setOutputDisplay(out, label) {
+    if (!out) return;
+    out.name = label;
+    out.localized_name = label;
+    out.label = label;
+}
+
 // Reconcile node.outputs to exactly [APPROVED, REJECTION_REASON, REJECTED_<r0>,
 // ..., REJECTED_<rN-1>]. Tail-only mutations (add/remove at end) so existing
 // link slot indices don't shift.
@@ -219,15 +232,20 @@ function syncRejectedOutputs(node, reasons) {
         const reasonIdx = outputs.length - FIXED_OUTPUT_OFFSET;
         const label = reasons[reasonIdx]?.label || `REJECTED_${reasonIdx + 1}`;
         node.addOutput(label, "IMAGE");
+        setOutputDisplay(outputs[outputs.length - 1], label);
     }
 
     // Update display names on the live REJECTED sockets.
     for (let i = 0; i < reasons.length; i++) {
-        const out = outputs[FIXED_OUTPUT_OFFSET + i];
-        if (!out) continue;
-        out.name = reasons[i].label || `REJECTED_${i + 1}`;
+        const label = reasons[i].label || `REJECTED_${i + 1}`;
+        setOutputDisplay(outputs[FIXED_OUTPUT_OFFSET + i], label);
     }
 
+    // Slot widths depend on label length — invalidate cached size so the
+    // node re-measures and the new labels render at the right width.
+    if (typeof node.setSize === "function" && typeof node.computeSize === "function") {
+        node.setSize(node.computeSize());
+    }
     node.setDirtyCanvas?.(true, true);
 }
 
