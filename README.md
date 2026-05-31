@@ -1,73 +1,180 @@
-# comfyui-newflow-nodes
+# Newflow Nodes for ComfyUI
 
-A collection of custom nodes for [ComfyUI](https://github.com/comfyanonymous/ComfyUI), grouped under the `newflow/` category in the node menu.
+> A toolkit of ComfyUI custom nodes for templated prompting, batched image inputs, and human-reviewable image pipelines.
+
+All nodes live under the `newflow/` category in the ComfyUI node menu.
+
+<!-- TODO: hero screenshot or GIF showing a workflow that uses Composer + Image Batch + Human in the Loop together -->
+
+## Highlights
+
+- **Prompt Composer** — rich-text USER/SYSTEM editors with `[[Key]]` templating, an Ollama-powered LLM Output editor, and vision-model image inputs.
+- **Image Batch** — autogrowing `IMAGE_N` sockets plus labeled container uploads, with a padded batch output for samplers and a native-resolution list output for vision LLMs.
+- **Dynamic Dropdowns** — a single node holding any number of user-configured dropdowns, feeding `[[Key]]` substitution in the Composer.
+- **Utility nodes** — Array Split / Array Pick for working with delimited strings, and a Human in the Loop pause for approve/reject review.
+
+## Requirements
+
+- ComfyUI with the **V3 node API** (recent builds)
+- Python 3.10+
+- Optional: [Ollama](https://ollama.com) — required only for the Prompt Composer's LLM Output feature
 
 ## Install
 
-Pick whichever method you have. After any of them: restart ComfyUI.
+After any method: **restart ComfyUI**.
 
-### A — Via ZIP (no git required)
+### A — ComfyUI Manager (recommended)
 
-1. Download `comfyui-newflow-nodes-<version>.zip`.
-2. Unzip into your `ComfyUI/custom_nodes/` folder. You should end up with `ComfyUI/custom_nodes/comfyui-newflow-nodes/__init__.py`.
-3. If `requirements.txt` is non-empty, run `pip install -r ComfyUI/custom_nodes/comfyui-newflow-nodes/requirements.txt`.
+Open Manager's **Install Custom Nodes** dialog and search for **Newflow**.
 
-### Optional dependency: Ollama
+If the package isn't listed yet, use Manager's **Install via Git URL** field with:
 
-The **Newflow Prompt Composer** node uses [Ollama](https://ollama.com) for its LLM Output feature. Other nodes work without it. Install Ollama, then:
+```
+https://github.com/philipphaunstetter/comfyui-newflow-nodes
+```
+
+Manager handles future updates via its **Update** button.
+
+### B — Git
+
+```bash
+cd ComfyUI/custom_nodes
+git clone https://github.com/philipphaunstetter/comfyui-newflow-nodes
+```
+
+Update later with `git pull` from the cloned folder.
+
+### C — Release ZIP
+
+1. Download `comfyui-newflow-nodes-<version>.zip` from the [Releases page](https://github.com/philipphaunstetter/comfyui-newflow-nodes/releases).
+2. Unzip into `ComfyUI/custom_nodes/`. You should end up with `ComfyUI/custom_nodes/comfyui-newflow-nodes/__init__.py`.
+
+There are no Python dependencies to install — `requirements.txt` is empty by design (everything used is shipped with ComfyUI).
+
+## LLM features (requires Ollama)
+
+The **Newflow Prompt Composer** node's LLM Output feature streams from a local [Ollama](https://ollama.com) instance. All other nodes work without Ollama.
+
+To enable it:
 
 ```bash
 ollama serve              # starts the API on localhost:11434
 ollama pull llama3.2      # or any model you prefer
 ```
 
-The node's URL field is configurable per-instance; defaults to `http://localhost:11434`.
-
-### B — Via git (gets updates with `git pull`)
-
-```bash
-cd ComfyUI/custom_nodes
-git clone <repo-url> comfyui-newflow-nodes
-pip install -r comfyui-newflow-nodes/requirements.txt   # only if non-empty
-```
-
-To update later:
-```bash
-cd ComfyUI/custom_nodes/comfyui-newflow-nodes
-git pull
-```
-
-### C — Via ComfyUI Manager
-
-Paste the repo URL into Manager's "Install via Git URL" field. Manager then handles updates with its **Update** button.
-
-## Local development
-
-Symlink instead of cloning:
-
-```bash
-ln -s /path/to/comfyui-newflow-nodes ~/ComfyUI/custom_nodes/comfyui-newflow-nodes
-```
+The Composer's URL field is configurable per-instance and defaults to `http://localhost:11434`.
 
 ## Nodes
 
-| Node | Category | Description |
+| Node | Category | What it does |
 |---|---|---|
-| **Newflow Dynamic Dropdowns** | `newflow/inputs` | A single node holding any number of user-configured dropdowns. Each row has a label and a comma-separated option list (edited via the row's `…` menu). Outputs a JSON string of `{label: selected_value}` — rows set to `(none)` are skipped. |
-| **Newflow Image Batch** | `newflow/image` | Combines two image sources into one batch. Up to 16 `IMAGE_N` external sockets for chaining upstream images — they **autogrow**, so only `IMAGE_1` shows until you connect it, then `IMAGE_2` appears, and so on (up to 16). Plus a **container grid** of labeled cards with directly-uploaded images (drag-drop / file picker, per-card image browsing, include toggle, remove, drag-reorder, and an **+ Add container** button). Produces `IMAGE` (padded batch, samplers/preview compatible) and `IMAGE_LIST` (native-resolution list, for vision LLMs), plus a per-container output `IMAGE1`, `IMAGE2`, … (one per container, autogrown to match) carrying just that container's image — empty when the container's include box is off. Replaces the former *Newflow Clothing* / *Image Array* node — old workflows auto-migrate with their containers preserved. |
-| **Newflow Array Split** | `newflow/utils` | Splits a STRING by a user-configured separator (default `*`) into a list of items. Output is a list of strings (`is_output_list=True`); empty/whitespace items dropped; falls back to newline split when the separator field is empty. Pair with **Newflow Array Pick**. Preview shows numbered items in the node body. |
-| **Newflow Array Pick** | `newflow/utils` | Picks one item from a string array (e.g. the output of Newflow Array Split) by index. Index is clamped to a valid range. Schema uses `is_input_list=True` so the connected list flows through without auto-iteration. Preview shows the selected item. |
-| **Newflow Human in the Loop** | `newflow/utils` | Pauses the workflow at this node and shows the input IMAGE in the node body with **Approve** (continue) and **Reject** (stop) buttons. Approve passes the image through to the output; Reject raises ComfyUI's standard interrupt exception. ComfyUI's global Cancel button is honored while waiting. Times out after 10 minutes. |
-| **Newflow Prompt Composer** | `newflow/prompt` | One node, two modes via the top **mode** combo. The **same** rich USER/SYSTEM editors are used in both modes — content carries across mode switches. *Templated* mode: `[[Key]]` placeholders, slash-menu insertion, draggable variable chips — wire OPTIONS from Dynamic Dropdowns; missing keys render as red pills and substitute to `[MISSING: Key]`. *Plain* mode: the OPTIONS socket and chip strip are hidden and prompts are emitted verbatim (no substitution). Optional `USER`/`SYSTEM` input sockets accept an upstream STRING that overrides the matching editor when wired (the editor dims + locks). Both modes share the **LLM Output** editor (streamed from a local Ollama model), settings dialog, image inputs (`IMAGES` padded batch + `IMAGE_LIST` native-resolution from Newflow Image Batch — both forwarded to vision models), and the **Auto-generate on workflow run** option that pre-runs Composers before queuing. Replaces the former *Newflow Prompt Composer (Simple)* — old workflows auto-migrate to Plain mode. |
+| **Newflow Prompt Composer** | `newflow/prompt` | Rich-text USER/SYSTEM prompt editors with optional `[[Key]]` templating and an Ollama LLM Output editor. |
+| **Newflow Image Batch** | `newflow/image` | Combines autogrowing external `IMAGE_N` sockets with labeled directly-uploaded image containers into one batch. |
+| **Newflow Dynamic Dropdowns** | `newflow/inputs` | Any number of user-configured dropdowns, emitted as a JSON `{label: value}` string for `[[Key]]` substitution. |
+| **Newflow Human in the Loop** | `newflow/utils` | Pauses the workflow and shows the input IMAGE with Approve / Reject buttons. |
+| **Newflow Array Split** | `newflow/utils` | Splits a STRING by a user-configured separator into a list of items. |
+| **Newflow Array Pick** | `newflow/utils` | Picks one item from a string array by index (clamped). |
 
-## Building a release ZIP
+## Node reference
+
+### Newflow Prompt Composer
+
+<!-- TODO: screenshot of the Composer node with USER/SYSTEM/LLM editors and the chip strip -->
+
+A single mode-aware node with a top-level **mode** combo. The same rich USER/SYSTEM editors are shared across both modes — content carries through mode switches.
+
+- **Templated mode** (default) — supports `[[Key]]` placeholders with slash-menu insertion and draggable variable chips. Wire `OPTIONS` from a **Newflow Dynamic Dropdowns** node to provide values; missing keys render as red pills and substitute to `[MISSING: Key]`.
+- **Plain mode** — hides the `OPTIONS` socket and chip strip; prompts are emitted verbatim.
+
+Optional `USER` and `SYSTEM` input sockets accept upstream STRINGs that override the corresponding editor (the editor dims and locks). Both modes share:
+
+- The **LLM Output** editor, streamed from a local Ollama model with a per-node settings dialog.
+- Image inputs (`IMAGES` padded batch and `IMAGE_LIST` native-resolution list, typically wired from **Newflow Image Batch**) forwarded to vision-capable models.
+- An **Auto-generate on workflow run** option that pre-runs Composers before queuing the rest of the graph.
+
+### Newflow Image Batch
+
+<!-- TODO: screenshot of Image Batch with a few IMAGE_N inputs wired and a container grid populated -->
+
+Combines two image sources into a single batch:
+
+- Up to **16 autogrowing `IMAGE_N` sockets** for upstream image producers. Only `IMAGE_1` shows initially; `IMAGE_2` appears once `IMAGE_1` is wired, and so on.
+- A **container grid** of labeled cards with directly-uploaded images. Each card supports drag-drop / file picker, per-card image browsing, include toggle, remove, and drag-reorder. An **+ Add container** button appends new cards.
+
+Outputs:
+
+- `IMAGE` — a white-padded batch compatible with samplers and preview nodes.
+- `IMAGE_LIST` — a native-resolution list, suitable for vision LLM inputs.
+- Per-container `IMAGE1`, `IMAGE2`, … — each carrying just that container's selected image. The sockets autogrow to match the number of containers. A container's include toggle gates only the aggregate outputs; the per-container socket emits an empty 0-image batch when the container is excluded or has no image, so socket indices stay stable.
+
+### Newflow Dynamic Dropdowns
+
+<!-- TODO: screenshot of Dynamic Dropdowns with a few labeled rows configured -->
+
+A single node holding any number of user-configured dropdown rows. Each row has a label and a comma-separated option list (edited via the row's `…` menu). Outputs a JSON string of `{label: selected_value}`. Rows set to `(none)` are skipped.
+
+Typically wired into a **Prompt Composer** in Templated mode, where each label becomes a `[[Key]]` token.
+
+### Newflow Human in the Loop
+
+<!-- TODO: screenshot of the node displaying an image with Approve / Reject buttons -->
+
+Pauses the workflow at this node and shows the input `IMAGE` in the node body with **Approve** (continue) and **Reject** (stop) buttons.
+
+- Approve passes the image through to the output.
+- Reject raises ComfyUI's standard interrupt exception.
+- ComfyUI's global Cancel button is honored while waiting.
+- Times out after 10 minutes.
+
+### Newflow Array Split
+
+<!-- TODO: screenshot of Array Split with its numbered preview -->
+
+Splits a `STRING` by a user-configured separator (default `*`) into a list of items.
+
+- Output is a list of strings (`is_output_list=True`).
+- Empty / whitespace items are dropped.
+- Falls back to newline split when the separator field is empty.
+- Preview shows numbered items inside the node body.
+
+Pair with **Newflow Array Pick**.
+
+### Newflow Array Pick
+
+<!-- TODO: screenshot of Array Pick selecting an item from a Split output -->
+
+Picks one item from a string array (e.g. the output of **Newflow Array Split**) by index.
+
+- Index is clamped to a valid range.
+- Schema uses `is_input_list=True` so the connected list flows through without auto-iteration.
+- Preview shows the selected item.
+
+## Example workflows
+
+<!-- TODO: ship a couple of example workflow JSONs under `examples/` and link them here, e.g.:
+- `examples/templated-prompt.json` — Dynamic Dropdowns → Prompt Composer (Templated) → LLM Output
+- `examples/image-batch-vision.json` — Image Batch → Prompt Composer with vision model
+- `examples/review-loop.json` — generation → Human in the Loop → save
+-->
+
+Example workflows will be added here.
+
+## Contributing
+
+Issues and pull requests are welcome at [github.com/philipphaunstetter/comfyui-newflow-nodes](https://github.com/philipphaunstetter/comfyui-newflow-nodes).
+
+When adding a new node, follow the workflow described in [CLAUDE.md](CLAUDE.md) — plan first, then implement.
+
+## Releases
+
+Maintainers can build a release ZIP with:
 
 ```bash
 ./scripts/build.sh
 ```
 
-Reads version from `pyproject.toml`, writes `dist/comfyui-newflow-nodes-<version>.zip`. Bump the version in `pyproject.toml` before each release.
+It reads the version from `pyproject.toml` and writes `dist/comfyui-newflow-nodes-<version>.zip`. Bump the version in `pyproject.toml` before each release.
 
 ## License
 
-MIT
+MIT © 2026 Newflow
