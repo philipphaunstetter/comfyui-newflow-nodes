@@ -1,33 +1,227 @@
+/* ============================================================
+   Newflow Human in the Loop — v2 styles
+   per-image card grid + dynamic reasons editor + bulk bar + submit
+   ============================================================ */
+
 .newflow-hitl-root {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 4px;
+    gap: 8px;
+    padding: 6px;
     width: 100%;
     box-sizing: border-box;
 }
 
-.newflow-hitl-preview {
+/* -- Reasons editor (top) -------------------------------------- */
+
+.newflow-hitl-reasons {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 4px;
-    padding: 6px;
+    padding: 8px;
+    border: 1px solid var(--border-color, #444);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.newflow-hitl-reasons-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--input-text, #aaa);
+    opacity: 0.7;
+}
+
+.newflow-hitl-reason-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.newflow-hitl-reason-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    background: var(--comfy-input-bg, #0d0d0d);
+    border: 1px solid transparent;
+}
+
+.newflow-hitl-reason-row.dragging {
+    opacity: 0.4;
+}
+
+.newflow-hitl-reason-row.drop-target {
+    border-color: #fbbf24;
+}
+
+.newflow-hitl-reason-handle {
+    cursor: grab;
+    color: var(--input-text, #aaa);
+    opacity: 0.5;
+    font-size: 12px;
+    user-select: none;
+    padding: 0 2px;
+}
+.newflow-hitl-reason-handle:active {
+    cursor: grabbing;
+}
+
+.newflow-hitl-reason-label-input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 1px solid var(--border-color, #444);
+    border-radius: 3px;
+    color: var(--input-text, #ddd);
+    font-family: inherit;
+    font-size: 12px;
+    padding: 3px 6px;
+    box-sizing: border-box;
+}
+.newflow-hitl-reason-label-input:focus {
+    outline: none;
+    border-color: #fbbf24;
+}
+
+.newflow-hitl-reason-delete {
+    background: transparent;
+    border: none;
+    color: var(--input-text, #aaa);
+    opacity: 0.4;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 3px;
+    transition: opacity 120ms, color 120ms;
+}
+.newflow-hitl-reason-row:hover .newflow-hitl-reason-delete {
+    opacity: 0.9;
+}
+.newflow-hitl-reason-delete:hover {
+    color: #ef4444;
+    opacity: 1;
+}
+
+.newflow-hitl-reason-add {
+    align-self: flex-start;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px dashed var(--border-color, #555);
+    border-radius: 4px;
+    color: var(--input-text, #ccc);
+    font-family: inherit;
+    font-size: 11px;
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: background 120ms;
+}
+.newflow-hitl-reason-add:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+}
+.newflow-hitl-reason-add:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* -- Bulk bar -------------------------------------------------- */
+
+.newflow-hitl-bulk-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 8px;
+    border: 1px solid var(--border-color, #444);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.newflow-hitl-bulk-bar > button {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border-color, #555);
+    border-radius: 4px;
+    color: var(--input-text, #ddd);
+    font-family: inherit;
+    font-size: 11px;
+    padding: 4px 8px;
+    cursor: pointer;
+    transition: background 120ms;
+}
+.newflow-hitl-bulk-bar > button:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.12);
+}
+.newflow-hitl-bulk-bar > button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.newflow-hitl-bulk-approve {
+    border-color: #22c55e !important;
+    color: #22c55e !important;
+}
+.newflow-hitl-bulk-approve.pulse {
+    animation: newflow-hitl-pulse 1.4s ease-in-out infinite;
+}
+
+.newflow-hitl-bulk-reject-wrap {
+    display: inline-flex;
+    border: 1px solid #ef4444;
+    border-radius: 4px;
+    overflow: hidden;
+}
+.newflow-hitl-bulk-reject {
+    background: transparent !important;
+    border: none !important;
+    color: #ef4444 !important;
+    border-radius: 0 !important;
+    padding: 4px 8px !important;
+}
+.newflow-hitl-bulk-reject-caret {
+    background: transparent !important;
+    border: none !important;
+    border-left: 1px solid #ef4444 !important;
+    color: #ef4444 !important;
+    border-radius: 0 !important;
+    padding: 4px 6px !important;
+    cursor: pointer;
+}
+.newflow-hitl-bulk-reset {
+    margin-left: auto;
+    opacity: 0.7;
+}
+
+.newflow-hitl-bulk-counter {
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    color: var(--input-text, #aaa);
+    margin-left: auto;
+    display: inline-flex;
+    gap: 8px;
+}
+.newflow-hitl-bulk-counter .count-approved { color: #22c55e; }
+.newflow-hitl-bulk-counter .count-rejected { color: #ef4444; }
+.newflow-hitl-bulk-counter .count-undecided { color: var(--input-text, #aaa); }
+
+/* -- Card grid ------------------------------------------------- */
+
+.newflow-hitl-grid-host {
     border: 1px solid var(--border-color, #444);
     border-radius: 6px;
     background: var(--comfy-input-bg, #0d0d0d);
-    min-height: 200px;
-    max-height: 480px;
+    max-height: 70vh;
     overflow-y: auto;
-    align-items: center;
-    justify-content: center;
+    padding: 6px;
 }
 
-.newflow-hitl-preview img {
-    max-width: 100%;
-    max-height: 460px;
-    object-fit: contain;
-    border-radius: 4px;
-    user-select: none;
+.newflow-hitl-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 8px;
 }
 
 .newflow-hitl-placeholder {
@@ -36,74 +230,145 @@
     color: var(--input-text, #888);
     opacity: 0.6;
     text-align: center;
-    padding: 12px;
+    padding: 24px 12px;
 }
 
-.newflow-hitl-status {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    padding: 4px 8px;
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.04);
+.newflow-hitl-narrow-notice {
+    font-size: 11px;
     color: var(--input-text, #aaa);
-    text-align: center;
+    padding: 6px 8px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
 }
-.newflow-hitl-status[data-state="awaiting"] {
-    color: #1f1335;
-    background: #fbbf24;
-    font-weight: 600;
-}
-.newflow-hitl-status[data-state="approved"] {
-    color: #1f1335;
-    background: #22c55e;
-    font-weight: 600;
-}
-.newflow-hitl-status[data-state="rejected"] {
-    color: #fff;
-    background: #ef4444;
-    font-weight: 600;
-}
-.newflow-hitl-status[data-state="error"] {
-    color: #fff;
-    background: #b91c1c;
-    font-weight: 600;
+.newflow-hitl-narrow-notice button {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border-color, #555);
+    border-radius: 4px;
+    color: inherit;
+    font-family: inherit;
+    font-size: 11px;
+    padding: 3px 8px;
+    cursor: pointer;
 }
 
-.newflow-hitl-buttons {
+/* -- Card ------------------------------------------------------ */
+
+.newflow-hitl-card {
+    position: relative;
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
+    flex-direction: column;
+    border: 1px solid var(--border-color, #444);
+    border-left: 4px solid var(--border-color, #555);
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.25);
+    outline: none;
+    transition: border-color 160ms, box-shadow 120ms;
+}
+.newflow-hitl-card:hover {
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.06);
+}
+.newflow-hitl-card:focus {
+    outline: 2px solid #fbbf24;
+    outline-offset: 1px;
+}
+
+.newflow-hitl-card[data-state="approved"] {
+    border-left-color: #22c55e;
+}
+.newflow-hitl-card[data-state="rejected"] {
+    border-left-color: #ef4444;
+}
+.newflow-hitl-card[data-state="approved"] .newflow-hitl-card-thumb img,
+.newflow-hitl-card[data-state="rejected"] .newflow-hitl-card-thumb img {
+    opacity: 0.92;
+}
+
+.newflow-hitl-card.pulse-amber {
+    animation: newflow-hitl-amber 1s ease-in-out 1;
+}
+
+.newflow-hitl-card-thumb {
+    position: relative;
+    height: 180px;
+    background: #0a0a0a;
+    overflow: hidden;
+    cursor: zoom-in;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-top-right-radius: 4px;
+}
+.newflow-hitl-card-thumb img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    user-select: none;
+    transition: opacity 160ms;
+}
+
+.newflow-hitl-status-chip {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 22px;
+    max-width: calc(100% - 12px);
+    padding: 0 8px;
+    border-radius: 11px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    border: none;
+    font-family: inherit;
+}
+.newflow-hitl-status-chip[data-state="undecided"] {
+    background: rgba(0, 0, 0, 0.55);
+    color: #ddd;
+}
+.newflow-hitl-status-chip[data-state="approved"] {
+    background: #22c55e;
+    color: #1f1335;
+}
+.newflow-hitl-status-chip[data-state="rejected"] {
+    background: #ef4444;
+    color: #fff;
+    max-width: calc(100% - 12px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: inline-block;
+}
+
+.newflow-hitl-card-bar {
+    display: flex;
+    gap: 4px;
+    padding: 6px;
 }
 
 .newflow-hitl-btn {
     flex: 1;
-    height: 32px;
-    padding: 0 12px;
-    border-radius: 6px;
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 4px;
     border: 1px solid transparent;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     font-family: inherit;
     line-height: 1;
     transition: background 120ms, transform 80ms;
+    color: inherit;
 }
 .newflow-hitl-btn:active:not(:disabled) {
     transform: scale(0.98);
 }
 .newflow-hitl-btn:disabled {
-    opacity: 0.55;
+    opacity: 0.5;
     cursor: not-allowed;
-}
-
-.newflow-hitl-reject {
-    background: rgba(239, 68, 68, 0.85);
-    color: #fff;
-    border-color: #ef4444;
-}
-.newflow-hitl-reject:hover:not(:disabled) {
-    background: #ef4444;
 }
 
 .newflow-hitl-approve {
@@ -116,8 +381,237 @@
     color: #fff;
 }
 
-/* Per-reason rejection buttons — slightly smaller to fit multiple on one row */
-.newflow-hitl-reason-btn {
-    flex: 0 1 auto;
+.newflow-hitl-reject {
+    background: rgba(239, 68, 68, 0.85);
+    color: #fff;
+    border-color: #ef4444;
+}
+.newflow-hitl-reject:hover:not(:disabled) {
+    background: #ef4444;
+}
+
+/* Adaptive reject control: split-button (main + caret) */
+.newflow-hitl-reject-split {
+    flex: 1;
+    display: inline-flex;
+    border: 1px solid #ef4444;
+    border-radius: 4px;
+    overflow: hidden;
+    height: 28px;
+}
+.newflow-hitl-reject-split .newflow-hitl-reject {
+    flex: 1;
+    border: none;
+    border-radius: 0;
+    background: rgba(239, 68, 68, 0.85);
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+}
+.newflow-hitl-reject-caret {
+    width: 24px;
+    border: none;
+    border-left: 1px solid rgba(0, 0, 0, 0.3);
+    background: rgba(239, 68, 68, 0.85);
+    color: #fff;
+    cursor: pointer;
+    font-size: 10px;
+    font-family: inherit;
+}
+.newflow-hitl-reject-caret:hover {
+    background: #ef4444;
+}
+
+/* Segmented chips for 2-3 reasons */
+.newflow-hitl-reject-segmented {
+    flex: 1;
+    display: inline-flex;
+    gap: 2px;
+    height: 28px;
+}
+.newflow-hitl-reject-segmented .newflow-hitl-reject {
+    flex: 1;
+    border-radius: 4px;
+    font-size: 10px;
+    padding: 0 6px;
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.newflow-hitl-card-footer {
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+    padding: 0 8px 6px;
+    font-size: 10px;
+    color: var(--input-text, #888);
+    opacity: 0.7;
+}
+
+/* -- Submit bar ------------------------------------------------ */
+
+.newflow-hitl-submit-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 0 0;
+}
+
+.newflow-hitl-submit {
+    width: 100%;
+    height: 34px;
+    border-radius: 6px;
+    border: 1px solid #6366f1;
+    background: rgba(99, 102, 241, 0.85);
+    color: #fff;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 120ms, transform 80ms;
+}
+.newflow-hitl-submit:hover:not(:disabled) {
+    background: #6366f1;
+}
+.newflow-hitl-submit:active:not(:disabled) {
+    transform: scale(0.99);
+}
+.newflow-hitl-submit:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.newflow-hitl-submit-helper {
+    font-size: 10px;
+    color: var(--input-text, #888);
+    text-align: center;
+    opacity: 0.7;
+    min-height: 12px;
+}
+
+/* -- Settled / status banner ----------------------------------- */
+
+.newflow-hitl-status {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--input-text, #aaa);
+    text-align: center;
+}
+.newflow-hitl-status:empty {
+    display: none;
+}
+.newflow-hitl-status[data-state="awaiting"] {
+    color: #1f1335;
+    background: #fbbf24;
+    font-weight: 600;
+}
+.newflow-hitl-status[data-state="settled"] {
+    color: #1f1335;
+    background: #22c55e;
+    font-weight: 600;
+}
+.newflow-hitl-status[data-state="error"] {
+    color: #fff;
+    background: #b91c1c;
+    font-weight: 600;
+}
+
+/* -- Toast ----------------------------------------------------- */
+
+.newflow-hitl-toast {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    background: rgba(251, 191, 36, 0.18);
+    border: 1px solid #fbbf24;
+    color: #fbbf24;
     font-size: 11px;
+}
+.newflow-hitl-toast button {
+    background: transparent;
+    border: 1px solid #fbbf24;
+    color: #fbbf24;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 10px;
+    padding: 2px 6px;
+    cursor: pointer;
+    margin-left: auto;
+}
+
+/* -- Popover (reject reason menu) ------------------------------ */
+
+.newflow-hitl-popover {
+    position: fixed;
+    z-index: 10000;
+    min-width: 180px;
+    max-width: 320px;
+    background: #1a1a1a;
+    border: 1px solid var(--border-color, #444);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.newflow-hitl-popover button {
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: var(--input-text, #ddd);
+    font-family: inherit;
+    font-size: 12px;
+    padding: 6px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.newflow-hitl-popover button:hover {
+    background: rgba(239, 68, 68, 0.2);
+    color: #fff;
+}
+.newflow-hitl-popover .hotkey {
+    display: inline-block;
+    width: 14px;
+    color: var(--input-text, #aaa);
+    opacity: 0.6;
+    font-size: 10px;
+}
+
+/* -- Lightbox -------------------------------------------------- */
+
+.newflow-hitl-lightbox {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 10001;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: zoom-out;
+}
+.newflow-hitl-lightbox img {
+    max-width: 90vw;
+    max-height: 90vh;
+    object-fit: contain;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+/* -- Animations ------------------------------------------------ */
+
+@keyframes newflow-hitl-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+    50%      { box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.35); }
+}
+
+@keyframes newflow-hitl-amber {
+    0%, 100% { border-left-color: var(--border-color, #555); }
+    50%      { border-left-color: #fbbf24; }
 }

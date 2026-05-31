@@ -127,6 +127,95 @@ classifies values by JSON shape (order-independent), reconstructing one
 container per non-empty garment filename paired with its label, and is
 idempotent on already-collapsed `[containers]` data.
 
+### Human in the Loop
+
+`NewflowHumanInTheLoop` pauses workflow execution and renders the input IMAGE
+batch as a **per-image card grid** for human review. Each card has its own
+approve/reject state and rejected frames route to **user-named, dynamic**
+`REJECTED_N` output sockets so different rejection reasons can drive different
+sub-graphs (face → face detailer, lighting → relight, etc.).
+
+Output layout (`MAX_REJECTION_SLOTS=16`, frozen at registration):
+
+- idx 0 `APPROVED` (IMAGE) — `torch.cat` of approved frames; `None` if zero.
+- idx 1 `REJECTION_REASON` (STRING) — newline-joined per-image labels in input
+  order (empty line for approved positions). **Fixed at idx 1**, never moves
+  with reason count — heterogeneous types must live at fixed indices because
+  ComfyUI maps the i-th visible socket to schema idx i.
+- idx 2..17 `REJECTED_1..REJECTED_16` (IMAGE) — JS hides the tail via
+  `removeOutput`/`addOutput` and rewrites `outputs[i].name` to the user's
+  reason label (e.g. "face is off"). Tail-only mutations keep link slot
+  indices stable.
+
+Reasons live in a single `reasons_state` DOM widget (JSON `[{id, label}, ...]`,
+`serialize=true`) — **not** a schema input, read in Python from the prompt
+just like Image Batch's `containers` widget. The `id` is stable across rename
+so downstream routing follows even if the user retypes the label mid-pause.
+
+Per-image `decisions` (`{image_index → {state, reason_id}}`) are runtime-only
+in the JS, never serialized. The JS POSTs them as a single batch to
+`/newflow/hitl/decide`:
+
+```json
+{"node_id": "...",
+ "decisions": [{"image_index": 0, "approved": true, "reason_id": null},
+               {"image_index": 1, "approved": false, "reason_id": "r_abc"}, ...]}
+```
+
+The server validates length, gap-free indices, no duplicates, and known
+`reason_id`s, then `Event.set()`s the waiter so `execute()` resumes and
+buckets frames by decision. WS payloads bumped for per-image:
+
+- `newflow.hitl.awaiting` `{node_id, images:[{image_id, image_index, ...}],
+  reasons:[{id, label}]}`
+- `newflow.hitl.settled` `{node_id, outcome:'settled'|'timeout'|'cancelled',
+  approved_count, rejected_counts:{reason_id:count}, total}`
+
+`fingerprint_inputs` returns `NaN` so re-queueing always re-enters the pause
+(fixes a v1 caching bug where unchanged upstream silently skipped review).
+
+The frontend ([js/human_in_the_loop.js](js/human_in_the_loop.js)) handles:
+
+- **Reasons editor** (capped at 16, `+ Add reason` button, inline delete with
+  link-count confirm); reorder is intentionally **not** supported (would
+  either silently re-route wires or require expensive link bookkeeping).
+- **Card grid** (CSS `repeat(auto-fill, minmax(220px, 1fr))`, lazy thumbnails,
+  70vh scroll host, 4px color-coded left border + shape-coded status chip for
+  color-blind safety, click-to-zoom lightbox).
+- **Adaptive reject control**: 0 reasons → single button; 1 → labeled button;
+  2-3 → segmented chips; 4-16 → split-button with sticky-default + popover.
+  Sticky default is per-session (cleared on each `awaiting`, initialized to
+  `reasons[0].id`).
+- **Bulk bar** (Approve-all-undecided, Reject-all-undecided split-button,
+  Reset-all with inline two-step confirm, live `N approved · M rejected · K
+  undecided` counter).
+- **Submit gate** ("Submit decisions (N/M)", neutral blue/violet, disabled
+  until all decided; no auto-submit).
+- **Keyboard** (Tab/Arrow card focus; A=approve, R=reject(sticky), 1-9=reject
+  by reason index, Esc/U=reset, Space=lightbox; bulk Shift+A/Shift+R; focus
+  **auto-advances to next undecided** after each decision).
+- **Dynamic-reasons mid-pause**: rename = label updates in place (id stable);
+  remove = affected cards revert to undecided + 1s amber border pulse + toast
+  with one-step Undo restoring both reason and decisions. Silent re-routing
+  is explicitly **rejected** — wrong downstream branch = data corruption.
+
+Migration from v1 (`NewflowHumanInTheLoop` with 4 fixed `rejection_reason_N`
+STRING inputs + REJECTED_1..4 + REJECTION_REASON at idx 5) is **JS-only**
+via the `beforeConfigureGraph` shim `migrateHitlNode`:
+
+1. Detects v1 shape by widgets_values format (multi-string array, not a
+   single JSON entry shaped `[{id, label}]`); idempotent on v2 shape.
+2. Compacts non-empty + wired v1 slots into the v2 reasons list, synthesizing
+   `Reason N` placeholders for wired-but-empty v1 slots so existing
+   downstream wires survive.
+3. Replaces `widgets_values` with `[JSON.stringify(reasons)]`.
+4. Remaps link `origin_slot` values for every link originating from the node:
+   v1 slot 1..4 → v2 slot `2 + compactedIndex`; v1 slot 5 → v2 slot 1.
+
+`MAX_REJECTION_SLOTS` (Python) mirrors `MAX_REJECTION_SLOTS` (JS).
+`FIXED_OUTPUT_OFFSET = 2` in JS reflects the `[APPROVED, REJECTION_REASON]`
+prefix on the output list.
+
 ## Local development
 
 Symlink the repo into a local ComfyUI install instead of copying:
